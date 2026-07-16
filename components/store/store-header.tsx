@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { ShoppingCart } from 'lucide-react'
+import { ShoppingCart, Store, Package } from 'lucide-react'
 import { getAccessPayload } from '@/lib/auth/session'
 import { apiFetch } from '@/lib/api/server-client'
 import { logoutAction } from '@/actions/auth.actions'
@@ -38,8 +38,29 @@ export async function StoreHeader({ q = '' }: { q?: string }) {
           {payload ? (
             <>
               {isShop ? (
-                <Link href="/seller" className="text-muted-foreground hover:text-foreground">Seller dashboard</Link>
-              ) : null}
+                <Link
+                  href="/seller"
+                  className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                >
+                  <Store className="size-4" />
+                  Seller Centre
+                </Link>
+              ) : (
+                <Link
+                  href="/seller/account"
+                  className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                >
+                  <Store className="size-4" />
+                  Start Selling
+                </Link>
+              )}
+              <Link
+                href="/orders"
+                className={buttonVariants({ variant: 'outline', size: 'sm' })}
+              >
+                <Package className="size-4" />
+                Orders
+              </Link>
               <span className="hidden text-muted-foreground sm:inline">{payload.email}</span>
               <form action={logoutAction}>
                 <button type="submit" className="text-muted-foreground hover:text-foreground">Sign out</button>

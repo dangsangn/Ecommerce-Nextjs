@@ -36,7 +36,7 @@ export async function loginAction(
   const parsed = loginSchema.safeParse(Object.fromEntries(formData))
   if (!parsed.success)
     return { ok: false, message: parsed.error.issues[0].message }
-  const redirectTo = (formData.get('redirect') as string) || '/seller'
+  const redirectTo = (formData.get('redirect') as string) || '/'
   try {
     const data = await apiFetch<LoginData>('/auth/login', { body: parsed.data })
     await setSession(data.tokens, data.user._id)
@@ -61,7 +61,7 @@ export async function verifyOtpAction(
   } catch (e) {
     return { ok: false, message: errorMessage(e, 'Could not verify your code') }
   }
-  redirect('/seller')
+  redirect('/')
 }
 
 export async function resendOtpAction(

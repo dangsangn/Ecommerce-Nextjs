@@ -8,8 +8,8 @@ import { CommentForm } from '@/components/store/comment-form'
 import { Button } from '@/components/ui/button'
 import type { Comment } from '@/types/comment'
 
-function authorLabel(userId: string): string {
-  return `Customer ••${userId.slice(-4)}`
+function authorLabel(comment: Comment): string {
+  return comment.user?.name ?? `Customer ••${comment.userId.slice(-4)}`
 }
 
 function formatDate(s?: string): string {
@@ -44,16 +44,62 @@ function CommentItem({
   currentUserId?: string
   isReply?: boolean
 }) {
+  const replyToName =
+    comment.replyToUser?.name ??
+    (comment.replyToUserId ? `Customer ••${comment.replyToUserId.slice(-4)}` : null)
+
   return (
     <div className={isReply ? 'border-l pl-4' : ''}>
       <div className="flex items-center gap-2 text-sm">
-        <span className="font-medium">{authorLabel(comment.userId)}</span>
+        <span className="font-medium">{authorLabel(comment)}</span>
         <span className="text-muted-foreground">{formatDate(comment.createdAt)}</span>
         {comment.userId === currentUserId ? (
           <DeleteButton commentId={comment.id} productId={productId} />
         ) : null}
       </div>
-      <p className="text-sm">{comment.content}</p>
+      <p className="text-sm">
+        {isReply && replyToName ? (
+          <span className="mr-1 font-medium text-primary">@{replyToName}</span>
+        ) : null}
+        {comment.content}
+      </p>
+    </div>
+  )
+}
+
+// Nút Reply cho bất kỳ comment nào (gốc hoặc con).
+// Kiểu YouTube 2 tầng: reply luôn treo phẳng dưới comment GỐC (rootId),
+// còn replyToUserId là tác giả của chính comment vừa bấm để hiển thị "@tên".
+function ReplyControl({
+  productId,
+  rootId,
+  target,
+  isOpen,
+  onToggle,
+  onDone,
+}: {
+  productId: string
+  rootId: string
+  target: Comment
+  isOpen: boolean
+  onToggle: () => void
+  onDone: () => void
+}) {
+  return (
+    <div className="pl-4">
+      <Button variant="ghost" size="xs" onClick={onToggle}>
+        {isOpen ? 'Cancel' : 'Reply'}
+      </Button>
+      {isOpen ? (
+        <div className="mt-2">
+          <CommentForm
+            productId={productId}
+            parentId={rootId}
+            replyToUserId={target.userId}
+            onDone={onDone}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -70,6 +116,9 @@ export function CommentSection({
   const { topLevel, repliesByParent } = groupComments(comments)
   const [replyOpen, setReplyOpen] = useState<string | null>(null)
 
+  const toggle = (id: string) => setReplyOpen((cur) => (cur === id ? null : id))
+  const close = () => setReplyOpen(null)
+
   return (
     <section className="space-y-6 border-t pt-8">
       <h2 className="text-xl font-semibold">Comments</h2>
@@ -82,23 +131,29 @@ export function CommentSection({
           {topLevel.map((c) => (
             <li key={c.id} className="space-y-3">
               <CommentItem comment={c} productId={productId} currentUserId={currentUserId} />
-              <div className="pl-4">
-                <Button variant="ghost" size="xs" onClick={() => setReplyOpen(replyOpen === c.id ? null : c.id)}>
-                  {replyOpen === c.id ? 'Cancel' : 'Reply'}
-                </Button>
-                {replyOpen === c.id ? (
-                  <div className="mt-2">
-                    <CommentForm
+              <ReplyControl
+                productId={productId}
+                rootId={c.id}
+                target={c}
+                isOpen={replyOpen === c.id}
+                onToggle={() => toggle(c.id)}
+                onDone={close}
+              />
+              {(repliesByParent[c.id] ?? []).map((r) => (
+                <div key={r.id} className="space-y-2">
+                  <CommentItem comment={r} productId={productId} currentUserId={currentUserId} isReply />
+                  {/* Reply vào comment con vẫn treo phẳng dưới gốc c.id, chỉ @tên tác giả của r */}
+                  <div className="pl-4">
+                    <ReplyControl
                       productId={productId}
-                      parentId={c.id}
-                      replyToUserId={c.userId}
-                      onDone={() => setReplyOpen(null)}
+                      rootId={c.id}
+                      target={r}
+                      isOpen={replyOpen === r.id}
+                      onToggle={() => toggle(r.id)}
+                      onDone={close}
                     />
                   </div>
-                ) : null}
-              </div>
-              {(repliesByParent[c.id] ?? []).map((r) => (
-                <CommentItem key={r.id} comment={r} productId={productId} currentUserId={currentUserId} isReply />
+                </div>
               ))}
             </li>
           ))}

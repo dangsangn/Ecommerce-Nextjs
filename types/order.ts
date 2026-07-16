@@ -46,5 +46,6 @@ export interface Order {
   order_payment?: { method?: string }
   order_products: ShopOrderNew[]
   order_status: OrderStatus
+  order_tracking_number?: string
   createdAt?: string
 }

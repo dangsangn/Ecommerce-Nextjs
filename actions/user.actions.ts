@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
 import { apiFetch } from '@/lib/api/server-client'
 import { errorMessage } from '@/lib/api/error-message'
 import { setSession, getClientId } from '@/lib/auth/session'
@@ -37,7 +38,10 @@ export async function upgradeToShopAction(
   }
 
   revalidatePath('/seller/account')
-  return { ok: true, message: "You're now a shop" }
+  // Send the new seller straight to their dashboard. `?welcome=1` triggers the
+  // success toast there (the form unmounts on redirect, so it can't toast itself).
+  // Must run OUTSIDE the try/catch above — redirect() throws NEXT_REDIRECT.
+  redirect('/seller?welcome=1')
 }
 
 const AVATAR_TIMEOUT_MS = 10_000

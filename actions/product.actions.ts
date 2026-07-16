@@ -4,7 +4,11 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { apiFetch } from '@/lib/api/server-client'
 import { errorMessage } from '@/lib/api/error-message'
-import { productDetailsSchema, productEditSchema, splitAttributes } from '@/lib/validations/product'
+import {
+  productDetailsSchema,
+  productEditSchema,
+  splitAttributes,
+} from '@/lib/validations/product'
 import type { ActionState } from '@/actions/state'
 import type { PreparedImages, ProductImage } from '@/types/product'
 
@@ -16,8 +20,12 @@ export async function prepareImagesAction(
   _prev: PrepareState,
   formData: FormData,
 ): Promise<PrepareState> {
-  const files = formData.getAll('images').filter((f) => f instanceof File && f.size > 0)
-  if (files.length === 0) return { ok: false, message: 'Choose at least one image' }
+  const files = formData
+    .getAll('images')
+    .filter((f) => f instanceof File && f.size > 0)
+  console.log('🚀 ~ files:', files)
+  if (files.length === 0)
+    return { ok: false, message: 'Choose at least one image' }
   try {
     const data = await apiFetch<PreparedImages>('/product/upload/prepare', {
       multipart: formData,
@@ -34,7 +42,8 @@ export async function createProductAction(
   formData: FormData,
 ): Promise<ActionState> {
   const parsed = productDetailsSchema.safeParse(Object.fromEntries(formData))
-  if (!parsed.success) return { ok: false, message: parsed.error.issues[0].message }
+  if (!parsed.success)
+    return { ok: false, message: parsed.error.issues[0].message }
 
   const productId = String(formData.get('productId') ?? '')
   const thumbUrl = String(formData.get('thumbUrl') ?? '')
@@ -63,7 +72,10 @@ export async function createProductAction(
       },
     })
   } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not create the product') }
+    return {
+      ok: false,
+      message: errorMessage(e, 'Could not create the product'),
+    }
   }
   revalidatePath('/seller/products')
   redirect('/seller/products')
@@ -76,11 +88,19 @@ export async function updateProductAction(
   const id = String(formData.get('id') ?? '')
   if (!id) return { ok: false, message: 'Missing product id' }
   const parsed = productEditSchema.safeParse(Object.fromEntries(formData))
-  if (!parsed.success) return { ok: false, message: parsed.error.issues[0].message }
+  if (!parsed.success)
+    return { ok: false, message: parsed.error.issues[0].message }
   try {
-    await apiFetch(`/product/${id}`, { method: 'PATCH', auth: true, body: parsed.data })
+    await apiFetch(`/product/${id}`, {
+      method: 'PATCH',
+      auth: true,
+      body: parsed.data,
+    })
   } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not update the product') }
+    return {
+      ok: false,
+      message: errorMessage(e, 'Could not update the product'),
+    }
   }
   revalidatePath(`/seller/products/${id}/edit`)
   revalidatePath('/seller/products')
@@ -94,9 +114,16 @@ export async function publishProductAction(
   const id = String(formData.get('id') ?? '')
   if (!id) return { ok: false, message: 'Missing product id' }
   try {
-    await apiFetch(`/product/published/${id}`, { method: 'PATCH', auth: true, body: {} })
+    await apiFetch(`/product/published/${id}`, {
+      method: 'PATCH',
+      auth: true,
+      body: {},
+    })
   } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not publish the product') }
+    return {
+      ok: false,
+      message: errorMessage(e, 'Could not publish the product'),
+    }
   }
   revalidatePath('/seller/products')
   return { ok: true, message: 'Product published' }
@@ -109,9 +136,16 @@ export async function unpublishProductAction(
   const id = String(formData.get('id') ?? '')
   if (!id) return { ok: false, message: 'Missing product id' }
   try {
-    await apiFetch(`/product/draft/${id}`, { method: 'PATCH', auth: true, body: {} })
+    await apiFetch(`/product/draft/${id}`, {
+      method: 'PATCH',
+      auth: true,
+      body: {},
+    })
   } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not unpublish the product') }
+    return {
+      ok: false,
+      message: errorMessage(e, 'Could not unpublish the product'),
+    }
   }
   revalidatePath('/seller/products')
   return { ok: true, message: 'Product moved to drafts' }
@@ -123,13 +157,20 @@ export async function addProductImagesAction(
 ): Promise<ActionState> {
   const id = String(formData.get('id') ?? '')
   if (!id) return { ok: false, message: 'Missing product id' }
-  const files = formData.getAll('images').filter((f) => f instanceof File && f.size > 0)
-  if (files.length === 0) return { ok: false, message: 'Choose at least one image' }
+  const files = formData
+    .getAll('images')
+    .filter((f) => f instanceof File && f.size > 0)
+  if (files.length === 0)
+    return { ok: false, message: 'Choose at least one image' }
   // Backend reads multipart field `images`; strip the id field first.
   const upload = new FormData()
   for (const f of files) upload.append('images', f)
   try {
-    await apiFetch(`/product/upload/images/${id}`, { method: 'PUT', multipart: upload, auth: true })
+    await apiFetch(`/product/upload/images/${id}`, {
+      method: 'PUT',
+      multipart: upload,
+      auth: true,
+    })
   } catch (e) {
     return { ok: false, message: errorMessage(e, 'Could not add images') }
   }
