@@ -1,5 +1,6 @@
 import Link from 'next/link'
-import { toPriceString } from '@/lib/products/price'
+import { formatPriceRange } from '@/lib/products/price'
+import { priceRange } from '@/lib/products/sku'
 import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import {
@@ -58,26 +59,37 @@ export function ProductList({
               <TableHead>Product</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Price</TableHead>
-              <TableHead>Qty</TableHead>
+              <TableHead>Variants</TableHead>
+              <TableHead>Stock</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((p) => (
-              <TableRow key={p._id}>
-                <TableCell>
-                  <div className="flex items-center gap-3">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={p.product_thumb} alt="" className="h-10 w-10 rounded-md border object-cover" />
-                    <span className="font-medium">{p.product_name}</span>
-                  </div>
-                </TableCell>
-                <TableCell><Badge variant="secondary">{p.product_type}</Badge></TableCell>
-                <TableCell>{toPriceString(p.product_price)}</TableCell>
-                <TableCell>{p.product_quantity}</TableCell>
-                <TableCell><ProductRowActions id={p._id} published={tab === 'published'} /></TableCell>
-              </TableRow>
-            ))}
+            {items.map((p) => {
+              // The list endpoint returns SPUs only, so price is the stored
+              // range and stock is the total across this product's SKUs.
+              const range = priceRange(p)
+              return (
+                <TableRow key={p._id}>
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={p.product_thumb} alt="" className="h-10 w-10 rounded-md border object-cover" />
+                      <span className="font-medium">{p.product_name}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell><Badge variant="secondary">{p.product_type}</Badge></TableCell>
+                  <TableCell>{formatPriceRange(range.min, range.max)}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {p.product_variations?.length
+                      ? `${p.product_sku_count ?? 0} · ${p.product_variations.map((v) => v.name).join(' × ')}`
+                      : '—'}
+                  </TableCell>
+                  <TableCell>{p.product_quantity}</TableCell>
+                  <TableCell><ProductRowActions id={p._id} published={tab === 'published'} /></TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
       )}

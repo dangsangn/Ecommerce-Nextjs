@@ -22,3 +22,12 @@ export function toPriceNumber(value: Decimal): number {
   else n = NaN
   return Number.isFinite(n) ? n : 0
 }
+
+// "9.99" for a single price, "9.99 – 24.50" when the SKUs of one SPU differ.
+// The range is what a list page shows: the buyer has not picked a variant yet,
+// so there is no single price to show.
+export function formatPriceRange(min: number, max: number): string {
+  const lo = (Number.isFinite(min) ? min : 0).toFixed(2)
+  const hi = (Number.isFinite(max) ? max : 0).toFixed(2)
+  return lo === hi ? lo : `${lo} – ${hi}`
+}

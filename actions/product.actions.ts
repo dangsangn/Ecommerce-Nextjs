@@ -5,8 +5,11 @@ import { revalidatePath } from 'next/cache'
 import { apiFetch } from '@/lib/api/server-client'
 import { errorMessage } from '@/lib/api/error-message'
 import {
+  parseVariantPayload,
+  parseVariationsPayload,
   productDetailsSchema,
   productEditSchema,
+  skuEditSchema,
   splitAttributes,
 } from '@/lib/validations/product'
 import type { ActionState } from '@/actions/state'
@@ -23,9 +26,11 @@ export async function prepareImagesAction(
   const files = formData
     .getAll('images')
     .filter((f) => f instanceof File && f.size > 0)
-  console.log('🚀 ~ files:', files)
   if (files.length === 0)
     return { ok: false, message: 'Choose at least one image' }
+  // `draftId`, when the seller is adding a second batch, keeps every image in
+  // the same draft folder. Without it each batch would get its own folder and
+  // only the last one would pass the public_id check at create time.
   try {
     const data = await apiFetch<PreparedImages>('/product/upload/prepare', {
       multipart: formData,
@@ -59,6 +64,15 @@ export async function createProductAction(
     return { ok: false, message: 'Upload images before creating the product' }
   }
 
+  // The variant matrix travels as two JSON blobs written by the SKU editor.
+  // A product with no variants still sends one SKU — after the split every
+  // sellable thing is a SKU, some SPUs just have exactly one.
+  const variants = parseVariantPayload(
+    String(formData.get('product_variations') ?? '[]'),
+    String(formData.get('sku_list') ?? '[]'),
+  )
+  if (!variants.ok) return { ok: false, message: variants.message }
+
   const details = splitAttributes(parsed.data)
   try {
     await apiFetch('/product', {
@@ -69,6 +83,7 @@ export async function createProductAction(
         product_thumb_public_id: thumbPublicId,
         product_images: images,
         ...details,
+        ...variants.data,
       },
     })
   } catch (e) {
@@ -105,6 +120,94 @@ export async function updateProductAction(
   revalidatePath(`/seller/products/${id}/edit`)
   revalidatePath('/seller/products')
   return { ok: true, message: 'Product updated' }
+}
+
+/*
+  updateVariationsAction — rename axes and options, and set each option's photo.
+
+  The stored shape travels with the form (`shape`) so a mismatch is reported as
+  "options cannot be added or removed here" rather than as a 400 from the API.
+  The API enforces the same rule; this is the readable half of it.
+*/
+export async function updateVariationsAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const id = String(formData.get('id') ?? '')
+  if (!id) return { ok: false, message: 'Missing product id' }
+
+  let shape: { options: number }[]
+  try {
+    shape = JSON.parse(String(formData.get('shape') ?? '[]'))
+  } catch {
+    return { ok: false, message: 'Could not read the variations' }
+  }
+
+  const parsed = parseVariationsPayload(
+    String(formData.get('product_variations') ?? '[]'),
+    shape,
+  )
+  if (!parsed.ok) return { ok: false, message: parsed.message }
+
+  try {
+    await apiFetch(`/product/${id}/variations`, {
+      method: 'PATCH',
+      auth: true,
+      body: { product_variations: parsed.data },
+    })
+  } catch (e) {
+    return { ok: false, message: errorMessage(e, 'Could not update variations') }
+  }
+  revalidatePath(`/seller/products/${id}/edit`)
+  revalidatePath(`/products/${id}`)
+  return { ok: true, message: 'Variations updated' }
+}
+
+/*
+  updateSkusAction — the only path that changes price or stock.
+
+  PATCH /product/:id sends descriptive fields only; the backend rejects a price
+  there because it is derived from the SKUs. Prices land on Skus, stock on
+  Inventories, and the SPU's advertised range is recomputed server-side in the
+  same transaction.
+*/
+export async function updateSkusAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const id = String(formData.get('id') ?? '')
+  if (!id) return { ok: false, message: 'Missing product id' }
+
+  const ids = formData.getAll('sku_id').map(String)
+  const prices = formData.getAll('sku_price').map(String)
+  const stocks = formData.getAll('sku_stock').map(String)
+  const defaultId = String(formData.get('sku_default') ?? '')
+  if (ids.length === 0) return { ok: false, message: 'Nothing to update' }
+
+  const parsed = skuEditSchema.safeParse({
+    skus: ids.map((sku_id, i) => ({
+      sku_id,
+      sku_price: prices[i],
+      sku_stock: stocks[i],
+      ...(defaultId ? { sku_default: sku_id === defaultId } : {}),
+    })),
+  })
+  if (!parsed.success)
+    return { ok: false, message: parsed.error.issues[0].message }
+
+  try {
+    await apiFetch(`/product/${id}/sku`, {
+      method: 'PATCH',
+      auth: true,
+      body: parsed.data,
+    })
+  } catch (e) {
+    return { ok: false, message: errorMessage(e, 'Could not update variants') }
+  }
+  revalidatePath(`/seller/products/${id}/edit`)
+  revalidatePath('/seller/products')
+  revalidatePath(`/products/${id}`)
+  return { ok: true, message: 'Variants updated' }
 }
 
 export async function publishProductAction(

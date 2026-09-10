@@ -7,8 +7,17 @@ import { errorMessage } from '@/lib/api/error-message'
 import { getClientId } from '@/lib/auth/session'
 import type { ActionState } from '@/actions/state'
 
+/*
+  skuId / skuLabel are sent but NOT yet honoured by the backend: the cart still
+  keys its lines on productId alone, so two variants of the same SPU collapse
+  into one line. Sending them now means the day the cart feature keys on the SKU
+  the storefront needs no change; until then, treat a multi-variant cart line as
+  approximate.
+*/
 export async function addToCartAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const productId = String(formData.get('productId') ?? '')
+  const skuId = String(formData.get('skuId') ?? '')
+  const skuLabel = String(formData.get('skuLabel') ?? '')
   const quantity = Number(formData.get('quantity') ?? 1)
   if (!productId) return { ok: false, message: 'Missing product' }
   if (!Number.isFinite(quantity) || quantity < 1) return { ok: false, message: 'Quantity must be at least 1' }
@@ -17,12 +26,15 @@ export async function addToCartAction(_prev: ActionState, formData: FormData): P
   if (!clientId) redirect(`/login?redirect=/products/${productId}`)
 
   try {
-    await apiFetch('/cart', { auth: true, body: { productId, quantity } })
+    await apiFetch('/cart', {
+      auth: true,
+      body: { productId, quantity, ...(skuId ? { skuId } : {}), ...(skuLabel ? { skuLabel } : {}) },
+    })
   } catch (e) {
     return { ok: false, message: errorMessage(e, 'Could not add to cart') }
   }
   revalidatePath('/cart')
-  return { ok: true, message: 'Added to cart' }
+  return { ok: true, message: skuLabel ? `Added ${skuLabel} to cart` : 'Added to cart' }
 }
 
 export async function updateCartQuantityAction(_prev: ActionState, formData: FormData): Promise<ActionState> {

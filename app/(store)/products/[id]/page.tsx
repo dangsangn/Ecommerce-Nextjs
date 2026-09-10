@@ -1,11 +1,10 @@
 import Link from 'next/link'
 import { apiFetch } from '@/lib/api/server-client'
 import { getClientId } from '@/lib/auth/session'
-import { toPriceString } from '@/lib/products/price'
-import { Badge } from '@/components/ui/badge'
-import { AddToCart } from '@/components/store/add-to-cart'
+import { normalizeProductDetail } from '@/lib/products/sku'
+import { ProductPurchase } from '@/components/store/product-purchase'
 import { CommentSection } from '@/components/store/comment-section'
-import type { Product } from '@/types/product'
+import type { ProductDetail } from '@/types/product'
 import type { Comment } from '@/types/comment'
 
 export default async function ProductDetailPage({
@@ -14,15 +13,17 @@ export default async function ProductDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  let product: Product | null = null
+  let detail: ProductDetail | null = null
   let error: string | null = null
   try {
-    product = await apiFetch<Product>(`/product/${id}`)
+    // The endpoint returns { spu, skus }; normalize also accepts the old flat
+    // product so the page still renders against a backend without the split.
+    detail = normalizeProductDetail(await apiFetch<unknown>(`/product/${id}`))
   } catch (e) {
     error = e instanceof Error ? e.message : 'Could not load the product'
   }
 
-  if (error || !product) {
+  if (error || !detail) {
     return (
       <div className="space-y-4">
         <Link href="/" className="text-sm text-primary hover:underline">← Back to store</Link>
@@ -31,13 +32,13 @@ export default async function ProductDetailPage({
     )
   }
 
-  const gallery = product.product_images?.length
-    ? product.product_images
-    : [{ url: product.product_thumb, public_id: 'thumb' }]
-  const attrs = product.product_attributes ?? {}
+  const { spu, skus } = detail
+  const attrs = spu.product_attributes ?? {}
 
   let comments: Comment[] = []
   try {
+    // Reviews hang off the SPU, not the SKU: 40 reviews of one shirt belong on
+    // one page, not split across its twelve size/colour combinations.
     comments = await apiFetch<Comment[]>(`/comment?productId=${id}`)
   } catch {
     comments = []
@@ -47,34 +48,30 @@ export default async function ProductDetailPage({
   return (
     <div className="space-y-6">
       <Link href="/" className="text-sm text-primary hover:underline">← Back to store</Link>
-      <div className="grid gap-8 md:grid-cols-2">
-        <div className="grid grid-cols-2 gap-2">
-          {gallery.map((img) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={img.public_id} src={img.url} alt={product!.product_name} className="aspect-square w-full rounded-md border object-cover" />
-          ))}
-        </div>
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold">{product.product_name}</h1>
-            <Badge variant="secondary">{product.product_type}</Badge>
-          </div>
-          <p className="text-xl">{toPriceString(product.product_price)}</p>
-          <p className="text-sm text-muted-foreground">In stock: {product.product_quantity}</p>
-          {product.product_description ? <p className="text-sm">{product.product_description}</p> : null}
-          {Object.keys(attrs).length > 0 ? (
-            <dl className="grid grid-cols-2 gap-1 text-sm">
-              {Object.entries(attrs).map(([k, v]) => (
-                <div key={k} className="contents">
-                  <dt className="text-muted-foreground capitalize">{k}</dt>
-                  <dd>{String(v)}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-          <AddToCart productId={product._id} max={product.product_quantity} />
-        </div>
-      </div>
+
+      <ProductPurchase spu={spu} skus={skus} />
+
+      {spu.product_description ? (
+        <section className="space-y-2">
+          <h2 className="text-lg font-medium">Description</h2>
+          <p className="text-sm">{spu.product_description}</p>
+        </section>
+      ) : null}
+
+      {Object.keys(attrs).length > 0 ? (
+        <section className="space-y-2">
+          <h2 className="text-lg font-medium">Details</h2>
+          <dl className="grid max-w-md grid-cols-2 gap-1 text-sm">
+            {Object.entries(attrs).map(([k, v]) => (
+              <div key={k} className="contents">
+                <dt className="text-muted-foreground capitalize">{k}</dt>
+                <dd>{String(v)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
+
       <CommentSection productId={id} comments={comments} currentUserId={currentUserId} />
     </div>
   )
