@@ -3,8 +3,8 @@ import { SellerMobileNav } from '@/components/seller/seller-mobile-nav'
 
 export default function SellerLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-screen">
-      <aside className="hidden w-60 shrink-0 border-r border-sidebar-border bg-sidebar md:block">
+    <div className="flex min-h-screen bg-surface">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 border-r border-sidebar-border bg-card md:block">
         <SellerSidebar />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">

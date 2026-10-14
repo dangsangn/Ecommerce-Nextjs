@@ -11,7 +11,7 @@ export function SellerSidebar() {
   return (
     <div className="flex h-full w-full flex-col gap-6 px-3 py-6">
       <div className="px-3">
-        <Link href="/seller" className="text-lg font-semibold">SHOP</Link>
+        <Link href="/seller" className="text-xl font-extrabold tracking-tight text-brand">SHOP</Link>
         <p className="text-xs text-muted-foreground">Seller Centre</p>
       </div>
       <nav className="flex flex-1 flex-col gap-1">
@@ -23,10 +23,10 @@ export function SellerSidebar() {
               href={item.href}
               aria-current={active ? 'page' : undefined}
               className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+                'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors',
                 active
-                  ? 'bg-sidebar-accent font-medium text-foreground'
-                  : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                  ? 'bg-brand-soft font-semibold text-brand'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >
               <item.icon className="size-4" />

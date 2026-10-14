@@ -11,7 +11,7 @@ import type { CartProduct } from '@/types/cart'
 function IconButton({ label, children }: { label: string; children: React.ReactNode }) {
   const { pending } = useFormStatus()
   return (
-    <Button type="submit" variant="outline" size="icon" aria-label={label} disabled={pending}>
+    <Button type="submit" variant="ghost" size="icon" aria-label={label} disabled={pending} className="size-9 rounded-xl">
       {children}
     </Button>
   )
@@ -33,21 +33,21 @@ export function CartLine({ product }: { product: CartProduct }) {
   const lineTotal = toPriceString(toPriceNumber(price) * quantity)
 
   return (
-    <div className="flex items-center gap-4 border-b py-4">
+    <div className="flex flex-wrap items-center gap-4 border-b py-4 last:border-0 sm:flex-nowrap">
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={thumb} alt={name} className="h-16 w-16 rounded-md border object-cover" />
-      <div className="flex-1">
-        <p className="font-medium">{name}</p>
+      <img src={thumb} alt={name} className="size-20 rounded-xl border bg-white object-contain" />
+      <div className="min-w-0 flex-1">
+        <p className="line-clamp-2 font-semibold">{name}</p>
         <p className="text-sm text-muted-foreground">{toPriceString(price)} each</p>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center rounded-xl border">
         <form action={qtyAction}>
           <input type="hidden" name="productId" value={productId} />
           <input type="hidden" name="oldQuantity" value={quantity} />
           <input type="hidden" name="newQuantity" value={quantity - 1} />
           <IconButton label="Decrease quantity">−</IconButton>
         </form>
-        <span className="w-8 text-center tabular-nums">{quantity}</span>
+        <span className="w-8 text-center font-medium tabular-nums">{quantity}</span>
         <form action={qtyAction}>
           <input type="hidden" name="productId" value={productId} />
           <input type="hidden" name="oldQuantity" value={quantity} />
@@ -55,11 +55,11 @@ export function CartLine({ product }: { product: CartProduct }) {
           <IconButton label="Increase quantity">+</IconButton>
         </form>
       </div>
-      <div className="w-20 text-right tabular-nums">{lineTotal}</div>
+      <div className="w-24 text-right font-bold text-brand tabular-nums">{lineTotal}</div>
       <form action={rmAction}>
         <input type="hidden" name="productId" value={productId} />
         <input type="hidden" name="oldQuantity" value={quantity} />
-        <Button type="submit" variant="ghost" size="sm">Remove</Button>
+        <Button type="submit" variant="ghost" size="sm" className="text-muted-foreground hover:text-brand">Remove</Button>
       </form>
     </div>
   )

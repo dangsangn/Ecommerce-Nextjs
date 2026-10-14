@@ -1,11 +1,14 @@
 import Link from 'next/link'
-import { ShoppingCart, Store, Package } from 'lucide-react'
+import { LogOut, Package, ShoppingCart, Store, UserRound } from 'lucide-react'
 import { getAccessPayload } from '@/lib/auth/session'
 import { apiFetch } from '@/lib/api/server-client'
 import { logoutAction } from '@/actions/auth.actions'
-import { buttonVariants } from '@/components/ui/button'
 import { SearchBox } from '@/components/store/search-box'
 import type { Cart } from '@/types/cart'
+
+// Translucent white pill on the red bar — the CellphoneS header button style.
+const pill =
+  'inline-flex h-10 items-center gap-2 rounded-xl bg-white/15 px-3 text-sm font-medium text-white transition-colors hover:bg-white/25'
 
 export async function StoreHeader({ q = '' }: { q?: string }) {
   const payload = await getAccessPayload()
@@ -20,54 +23,60 @@ export async function StoreHeader({ q = '' }: { q?: string }) {
     }
   }
   return (
-    <header className="border-b">
-      <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3">
-        <Link href="/" className="text-lg font-semibold">SHOP</Link>
-        <div className="flex-1">
+    <header className="sticky top-0 z-40 bg-brand shadow-md">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 py-2.5 md:flex-nowrap md:gap-3">
+        <Link href="/" className="mr-1 text-2xl font-extrabold tracking-tight text-white">
+          SHOP
+        </Link>
+        <div className="order-last w-full md:order-0 md:flex-1">
           <SearchBox defaultValue={q} />
         </div>
-        <nav className="flex items-center gap-3 text-sm">
-          <Link href="/cart" aria-label="Cart" className="relative text-muted-foreground hover:text-foreground">
-            <ShoppingCart className="size-5" />
-            {cartCount > 0 ? (
-              <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] text-primary-foreground">
-                {cartCount}
-              </span>
-            ) : null}
+        <nav className="ml-auto flex items-center gap-2">
+          <Link href="/cart" aria-label="Cart" className={pill}>
+            <span className="relative">
+              <ShoppingCart className="size-5" />
+              {cartCount > 0 ? (
+                <span className="absolute -right-2.5 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-1 text-[10px] font-bold text-brand">
+                  {cartCount}
+                </span>
+              ) : null}
+            </span>
+            <span className="hidden lg:inline">Cart</span>
           </Link>
           {payload ? (
             <>
-              {isShop ? (
-                <Link
-                  href="/seller"
-                  className={buttonVariants({ variant: 'outline', size: 'sm' })}
-                >
-                  <Store className="size-4" />
-                  Seller Centre
-                </Link>
-              ) : (
-                <Link
-                  href="/seller/account"
-                  className={buttonVariants({ variant: 'outline', size: 'sm' })}
-                >
-                  <Store className="size-4" />
-                  Start Selling
-                </Link>
-              )}
-              <Link
-                href="/orders"
-                className={buttonVariants({ variant: 'outline', size: 'sm' })}
-              >
-                <Package className="size-4" />
-                Orders
+              <Link href={isShop ? '/seller' : '/seller/account'} className={pill}>
+                <Store className="size-5" />
+                <span className="hidden lg:inline">{isShop ? 'Seller Centre' : 'Start Selling'}</span>
               </Link>
-              <span className="hidden text-muted-foreground sm:inline">{payload.email}</span>
-              <form action={logoutAction}>
-                <button type="submit" className="text-muted-foreground hover:text-foreground">Sign out</button>
+              <Link href="/orders" className={pill}>
+                <Package className="size-5" />
+                <span className="hidden lg:inline">Orders</span>
+              </Link>
+              <div className={`${pill} hidden pr-1 hover:bg-white/15 xl:inline-flex`}>
+                <UserRound className="size-5" />
+                <span className="max-w-40 truncate">{payload.email}</span>
+                <form action={logoutAction}>
+                  <button
+                    type="submit"
+                    aria-label="Sign out"
+                    className="flex size-8 items-center justify-center rounded-lg hover:bg-white/20"
+                  >
+                    <LogOut className="size-4" />
+                  </button>
+                </form>
+              </div>
+              <form action={logoutAction} className="xl:hidden">
+                <button type="submit" aria-label="Sign out" className={pill}>
+                  <LogOut className="size-5" />
+                </button>
               </form>
             </>
           ) : (
-            <Link href="/login" className={buttonVariants({ variant: 'outline' })}>Sign in</Link>
+            <Link href="/login" className={`${pill} bg-white text-brand hover:bg-white/90`}>
+              <UserRound className="size-5" />
+              Sign in
+            </Link>
           )}
         </nav>
       </div>

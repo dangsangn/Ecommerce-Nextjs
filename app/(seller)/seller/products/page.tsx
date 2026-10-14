@@ -30,7 +30,7 @@ export default async function ProductsPage({
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Products</h1>
+        <h1 className="text-2xl font-bold">Products</h1>
         <Link href="/seller/products/new" className={buttonVariants()}>New product</Link>
       </div>
       {error ? (

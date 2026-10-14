@@ -29,7 +29,7 @@ export default async function CheckoutPage() {
   } catch (e) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-semibold">Checkout</h1>
+        <h1 className="text-2xl font-bold">Checkout</h1>
         <p className="text-sm text-destructive">{e instanceof Error ? e.message : 'Could not review your order'}</p>
         <Link href="/cart" className="text-sm text-primary hover:underline">← Back to cart</Link>
       </div>
@@ -40,7 +40,7 @@ export default async function CheckoutPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Checkout</h1>
+      <h1 className="text-2xl font-bold">Checkout</h1>
       <CheckoutWizard shopOrderIds={shopOrderIds} review={review.checkout_order} lines={lines} />
     </div>
   )

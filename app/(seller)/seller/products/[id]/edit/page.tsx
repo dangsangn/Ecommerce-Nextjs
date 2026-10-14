@@ -22,7 +22,7 @@ export default async function EditProductPage({
   return (
     <div className="space-y-6">
       <Link href="/seller/products" className="text-sm text-primary hover:underline">← Back to products</Link>
-      <h1 className="text-2xl font-semibold">Edit product</h1>
+      <h1 className="text-2xl font-bold">Edit product</h1>
       {error || !detail ? (
         <p className="text-sm text-destructive">{error ?? 'Product not found'}</p>
       ) : (

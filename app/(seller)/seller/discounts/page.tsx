@@ -18,7 +18,7 @@ export default async function DiscountsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Discounts</h1>
+        <h1 className="text-2xl font-bold">Discounts</h1>
         <Link href="/seller/discounts/new" className={buttonVariants()}>New discount</Link>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : <DiscountList discounts={discounts} />}

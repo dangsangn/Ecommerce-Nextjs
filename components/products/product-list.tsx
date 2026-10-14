@@ -53,6 +53,7 @@ export function ProductList({
           {tab === 'draft' ? 'No draft products.' : 'No published products.'}
         </p>
       ) : (
+        <div className="rounded-2xl bg-card px-2 shadow-sm ring-1 ring-foreground/5">
         <Table>
           <TableHeader>
             <TableRow>
@@ -92,6 +93,7 @@ export function ProductList({
             })}
           </TableBody>
         </Table>
+        </div>
       )}
 
       {pagination.totalPages > 1 ? (

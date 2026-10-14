@@ -14,7 +14,7 @@ export default async function AccountPage() {
     return (
       <div className="mx-auto max-w-xl space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold">Start selling on SHOP</h1>
+          <h1 className="text-2xl font-bold">Start selling on SHOP</h1>
           <p className="text-sm text-muted-foreground">
             Create your shop to start listing products and reaching buyers.
           </p>
@@ -28,7 +28,7 @@ export default async function AccountPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Account</h1>
+          <h1 className="text-2xl font-bold">Account</h1>
           <p className="text-sm text-muted-foreground">Manage your profile and shop.</p>
         </div>
         <form action={logoutAction}>

@@ -44,17 +44,19 @@ export default async function SellerHomePage() {
         <WelcomeToast />
       </Suspense>
       <div>
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
+        <h1 className="text-2xl font-bold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">
           Signed in as <span className="font-medium">{payload?.email ?? '—'}</span>
         </p>
       </div>
-      <div className="grid gap-6 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-3">
         {QUICK_ACTIONS.map((action) => (
           <Card key={action.href}>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <action.icon className="size-4 text-muted-foreground" />
+              <CardTitle className="flex items-center gap-3">
+                <span className="flex size-9 items-center justify-center rounded-xl bg-brand-soft text-brand">
+                  <action.icon className="size-4" />
+                </span>
                 {action.title}
               </CardTitle>
               <CardDescription>{action.description}</CardDescription>

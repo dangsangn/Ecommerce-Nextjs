@@ -36,7 +36,7 @@ export function CommentForm({
       {parentId ? <input type="hidden" name="parentId" value={parentId} /> : null}
       {replyToUserId ? <input type="hidden" name="replyToUserId" value={replyToUserId} /> : null}
       <Textarea name="content" placeholder={parentId ? 'Write a reply…' : 'Write a comment…'} required />
-      <SubmitButton>{parentId ? 'Reply' : 'Post comment'}</SubmitButton>
+      <SubmitButton className="ml-auto flex w-auto px-6">{parentId ? 'Reply' : 'Post comment'}</SubmitButton>
     </form>
   )
 }

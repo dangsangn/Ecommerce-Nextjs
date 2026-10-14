@@ -17,11 +17,11 @@ export default async function OrdersPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Your orders</h1>
+      <h1 className="text-2xl font-bold">Your orders</h1>
       {error ? (
         <p className="text-sm text-destructive">{error}</p>
       ) : orders.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="rounded-2xl bg-card px-6 py-12 text-center text-sm text-muted-foreground shadow-sm">
           No orders yet. <Link href="/" className="text-primary hover:underline">Browse products</Link>
         </p>
       ) : (

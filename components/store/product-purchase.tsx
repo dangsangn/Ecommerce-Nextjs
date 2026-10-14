@@ -12,8 +12,8 @@ import {
   type VariantSelection,
 } from '@/lib/products/sku'
 import { AddToCart } from '@/components/store/add-to-cart'
-import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { Check } from 'lucide-react'
 import type { Product, ProductImage, Sku } from '@/types/product'
 
 /*
@@ -73,13 +73,13 @@ export function ProductPurchase({ spu, skus }: { spu: Product; skus: Sku[] }) {
   const incomplete = variations.length > 0 && !selectedSku
 
   return (
-    <div className="grid gap-8 md:grid-cols-2">
+    <div className="grid gap-6 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] md:gap-10">
       <div className="space-y-3">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={activeImage}
           alt={spu.product_name}
-          className="aspect-square w-full rounded-md border object-cover"
+          className="aspect-square w-full rounded-xl border bg-white object-contain"
         />
         {gallery.length > 1 ? (
           <div className="flex flex-wrap gap-2">
@@ -91,35 +91,40 @@ export function ProductPurchase({ spu, skus }: { spu: Product; skus: Sku[] }) {
                 aria-label="Show this image"
                 aria-current={img.url === activeImage}
                 className={cn(
-                  'size-16 overflow-hidden rounded-md border transition-colors',
+                  'size-16 overflow-hidden rounded-lg border-2 bg-white transition-colors',
                   img.url === activeImage
-                    ? 'border-primary ring-1 ring-primary'
-                    : 'hover:border-foreground/40',
+                    ? 'border-brand'
+                    : 'border-transparent ring-1 ring-border hover:ring-brand/50',
                 )}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={img.url} alt="" className="size-full object-cover" />
+                <img src={img.url} alt="" className="size-full object-contain" />
               </button>
             ))}
           </div>
         ) : null}
       </div>
 
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-2xl font-semibold">{spu.product_name}</h1>
-          <Badge variant="secondary">{spu.product_type}</Badge>
+      <div className="space-y-5">
+        <div className="space-y-2 border-b pb-4">
+          <h1 className="text-xl font-bold leading-snug sm:text-2xl">{spu.product_name}</h1>
+          <span className="inline-block rounded-md bg-brand-soft px-2 py-0.5 text-xs font-semibold uppercase text-brand">
+            {spu.product_type.toLowerCase()}
+          </span>
         </div>
 
-        <p className="text-xl">
-          {selectedSku
-            ? toPriceString(selectedSku.sku_price)
-            : formatPriceRange(range.min, range.max)}
-        </p>
+        <div className="rounded-xl border border-brand/20 bg-brand-soft px-4 py-3">
+          <p className="text-xs font-medium text-muted-foreground">Price</p>
+          <p className="text-2xl font-extrabold text-brand tabular-nums sm:text-3xl">
+            {selectedSku
+              ? toPriceString(selectedSku.sku_price)
+              : formatPriceRange(range.min, range.max)}
+          </p>
+        </div>
 
         {variations.map((axis, axisIdx) => (
           <fieldset key={axis.name} className="space-y-2">
-            <legend className="text-sm font-medium">
+            <legend className="mb-2 text-sm font-semibold">
               {axis.name}
               {selection[axisIdx] != null ? (
                 <span className="ml-1 text-muted-foreground">
@@ -150,16 +155,21 @@ export function ProductPurchase({ spu, skus }: { spu: Product; skus: Sku[] }) {
                       setSelection((s) => toggleOption(s, axisIdx, optionIdx))
                     }}
                     className={cn(
-                      'rounded-md border px-3 py-1.5 text-sm transition-colors',
+                      'relative min-w-24 overflow-hidden rounded-lg border bg-card px-4 py-2 text-sm font-medium transition-colors',
                       selected
-                        ? 'border-primary bg-primary/10 text-foreground'
-                        : 'hover:border-foreground/40',
+                        ? 'border-brand text-brand'
+                        : 'hover:border-brand/50',
                       !selectable &&
                         !selected &&
                         'cursor-not-allowed text-muted-foreground line-through opacity-50',
                     )}
                   >
                     {option}
+                    {selected ? (
+                      <span className="absolute right-0 top-0 flex size-4 items-center justify-center rounded-bl-lg bg-brand text-white">
+                        <Check className="size-2.5" strokeWidth={3} />
+                      </span>
+                    ) : null}
                   </button>
                 )
               })}
@@ -167,7 +177,14 @@ export function ProductPurchase({ spu, skus }: { spu: Product; skus: Sku[] }) {
           </fieldset>
         ))}
 
-        <p className="text-sm text-muted-foreground">
+        <p
+          className={cn(
+            'w-fit rounded-full px-3 py-1 text-xs font-medium',
+            !incomplete && stock > 0
+              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+              : 'bg-muted text-muted-foreground',
+          )}
+        >
           {incomplete
             ? `Pick ${remainingAxes(variations, selection)} to see stock`
             : stock > 0

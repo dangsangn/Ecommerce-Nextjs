@@ -22,6 +22,7 @@ export function DiscountList({ discounts }: { discounts: Discount[] }) {
     return <p className="text-sm text-muted-foreground">No discounts yet.</p>
   }
   return (
+    <div className="rounded-2xl bg-card px-2 shadow-sm ring-1 ring-foreground/5">
     <Table>
       <TableHeader>
         <TableRow>
@@ -48,5 +49,6 @@ export function DiscountList({ discounts }: { discounts: Discount[] }) {
         ))}
       </TableBody>
     </Table>
+    </div>
   )
 }

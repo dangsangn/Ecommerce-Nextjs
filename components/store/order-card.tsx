@@ -19,7 +19,7 @@ export function OrderCard({ order }: { order: Order }) {
           <span className="text-sm font-medium">#{code}</span>
           <span className="text-sm text-muted-foreground">{formatOrderDate(order.createdAt)}</span>
         </div>
-        <span className="font-semibold tabular-nums">{toPriceString(order.order_checkout?.totalCheckout ?? 0)}</span>
+        <span className="font-bold text-brand tabular-nums">{toPriceString(order.order_checkout?.totalCheckout ?? 0)}</span>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="space-y-2">

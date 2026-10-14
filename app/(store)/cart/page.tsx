@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import { ShoppingCart } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { apiFetch } from '@/lib/api/server-client'
 import { toPriceString } from '@/lib/products/price'
 import { cartSubtotal } from '@/lib/cart/summary'
@@ -19,33 +21,40 @@ export default async function CartPage() {
   const items = cart.cart_products ?? []
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Your cart</h1>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-bold">Your cart</h1>
       {error ? (
-        <p className="text-sm text-destructive">{error}</p>
+        <p className="rounded-2xl bg-card p-6 text-sm text-destructive shadow-sm">{error}</p>
       ) : items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Your cart is empty. <Link href="/" className="text-primary hover:underline">Browse products</Link>
-        </p>
+        <div className="flex flex-col items-center gap-3 rounded-2xl bg-card px-6 py-16 text-center shadow-sm">
+          <span className="flex size-16 items-center justify-center rounded-full bg-brand-soft text-brand">
+            <ShoppingCart className="size-8" />
+          </span>
+          <p className="text-muted-foreground">Your cart is empty.</p>
+          <Link href="/" className={cn(buttonVariants(), 'h-10 rounded-xl px-6')}>Browse products</Link>
+        </div>
       ) : (
-        <div className="space-y-6">
-          <div>
+        <div className="grid items-start gap-4 lg:grid-cols-[1fr_340px]">
+          <div className="rounded-2xl bg-card px-4 shadow-sm sm:px-6">
             {items.map((p) => (
               <CartLine key={p.productId} product={p} />
             ))}
           </div>
-          <div className="flex items-center justify-between">
-            <form action={clearCartAction}>
-              <Button type="submit" variant="ghost">Clear cart</Button>
-            </form>
-            <div className="flex flex-col items-end gap-2 text-right">
-              <div>
-                <p className="text-sm text-muted-foreground">Subtotal</p>
-                <p className="text-xl font-semibold tabular-nums">{toPriceString(cartSubtotal(items))}</p>
-              </div>
-              <Link href="/checkout" className={buttonVariants()}>Proceed to checkout</Link>
+          <aside className="space-y-4 rounded-2xl bg-card p-5 shadow-sm lg:sticky lg:top-24">
+            <div className="flex items-baseline justify-between">
+              <span className="text-sm text-muted-foreground">Subtotal</span>
+              <span className="text-2xl font-extrabold text-brand tabular-nums">{toPriceString(cartSubtotal(items))}</span>
             </div>
-          </div>
+            <Link
+              href="/checkout"
+              className={cn(buttonVariants(), 'h-12 w-full rounded-xl text-base font-bold uppercase')}
+            >
+              Proceed to checkout
+            </Link>
+            <form action={clearCartAction}>
+              <Button type="submit" variant="ghost" className="w-full text-muted-foreground">Clear cart</Button>
+            </form>
+          </aside>
         </div>
       )}
     </div>

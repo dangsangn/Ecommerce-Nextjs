@@ -3,6 +3,7 @@ import { useActionState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { addToCartAction } from '@/actions/cart.actions'
 import { initialActionState } from '@/actions/state'
+import { ShoppingCart } from 'lucide-react'
 import { SubmitButton } from '@/components/auth/submit-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -37,7 +38,7 @@ export function AddToCart({
       {skuId ? <input type="hidden" name="skuId" value={skuId} /> : null}
       {skuLabel ? <input type="hidden" name="skuLabel" value={skuLabel} /> : null}
       <fieldset disabled={disabled} className="flex items-end gap-3 disabled:opacity-60">
-        <div className="w-24 space-y-2">
+        <div className="w-24 shrink-0 space-y-2">
           <Label htmlFor="quantity">Quantity</Label>
           <Input
             id="quantity"
@@ -46,9 +47,13 @@ export function AddToCart({
             min={1}
             max={max}
             defaultValue={1}
+            className="h-12 rounded-xl text-center text-base"
           />
         </div>
-        <SubmitButton>Add to cart</SubmitButton>
+        <SubmitButton className="h-12 flex-1 rounded-xl bg-gradient-to-b from-brand to-brand-dark text-base font-bold uppercase shadow-sm hover:opacity-95">
+          <ShoppingCart className="size-5" />
+          Add to cart
+        </SubmitButton>
       </fieldset>
       {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
     </form>

@@ -49,15 +49,18 @@ function CommentItem({
     (comment.replyToUserId ? `Customer ••${comment.replyToUserId.slice(-4)}` : null)
 
   return (
-    <div className={isReply ? 'border-l pl-4' : ''}>
+    <div className={isReply ? 'ml-4 rounded-xl bg-muted/60 p-3' : ''}>
       <div className="flex items-center gap-2 text-sm">
-        <span className="font-medium">{authorLabel(comment)}</span>
+        <span className="flex size-7 items-center justify-center rounded-full bg-brand-soft text-xs font-bold uppercase text-brand">
+          {authorLabel(comment).charAt(0)}
+        </span>
+        <span className="font-semibold">{authorLabel(comment)}</span>
         <span className="text-muted-foreground">{formatDate(comment.createdAt)}</span>
         {comment.userId === currentUserId ? (
           <DeleteButton commentId={comment.id} productId={productId} />
         ) : null}
       </div>
-      <p className="text-sm">
+      <p className="mt-1 pl-9 text-sm">
         {isReply && replyToName ? (
           <span className="mr-1 font-medium text-primary">@{replyToName}</span>
         ) : null}
@@ -120,8 +123,8 @@ export function CommentSection({
   const close = () => setReplyOpen(null)
 
   return (
-    <section className="space-y-6 border-t pt-8">
-      <h2 className="text-xl font-semibold">Comments</h2>
+    <section className="space-y-6">
+      <h2 className="text-lg font-bold">Questions &amp; comments</h2>
       <CommentForm productId={productId} />
 
       {topLevel.length === 0 ? (
@@ -129,7 +132,7 @@ export function CommentSection({
       ) : (
         <ul className="space-y-6">
           {topLevel.map((c) => (
-            <li key={c.id} className="space-y-3">
+            <li key={c.id} className="space-y-3 border-b pb-5 last:border-0 last:pb-0">
               <CommentItem comment={c} productId={productId} currentUserId={currentUserId} />
               <ReplyControl
                 productId={productId}

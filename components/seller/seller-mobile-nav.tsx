@@ -23,18 +23,18 @@ export function SellerMobileNav() {
 
   return (
     <div className="md:hidden">
-      <div className="flex items-center gap-3 border-b border-sidebar-border bg-sidebar px-4 py-3">
+      <div className="flex items-center gap-3 bg-brand px-4 py-3 text-white shadow-md">
         <button
           type="button"
           aria-label="Open menu"
           aria-expanded={open}
           onClick={() => setOpen(true)}
-          className="text-muted-foreground hover:text-foreground"
+          className="text-white/90 hover:text-white"
         >
           <Menu className="size-5" />
         </button>
         <Link href="/seller" className="text-base font-semibold">
-          SHOP <span className="font-normal text-muted-foreground">Seller Centre</span>
+          <span className="font-extrabold">SHOP</span> <span className="font-normal text-white/80">Seller Centre</span>
         </Link>
       </div>
 
@@ -45,10 +45,10 @@ export function SellerMobileNav() {
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
-          <div className="absolute inset-y-0 left-0 flex w-64 max-w-[80%] flex-col gap-6 bg-sidebar px-3 py-6 shadow-lg">
+          <div className="absolute inset-y-0 left-0 flex w-64 max-w-[80%] flex-col gap-6 bg-card px-3 py-6 shadow-lg">
             <div className="flex items-center justify-between px-3">
               <div>
-                <span className="text-lg font-semibold">SHOP</span>
+                <span className="text-xl font-extrabold tracking-tight text-brand">SHOP</span>
                 <p className="text-xs text-muted-foreground">Seller Centre</p>
               </div>
               <button
@@ -70,10 +70,10 @@ export function SellerMobileNav() {
                     onClick={() => setOpen(false)}
                     aria-current={active ? 'page' : undefined}
                     className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+                      'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors',
                       active
-                        ? 'bg-sidebar-accent font-medium text-foreground'
-                        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                        ? 'bg-brand-soft font-semibold text-brand'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                     )}
                   >
                     <item.icon className="size-4" />

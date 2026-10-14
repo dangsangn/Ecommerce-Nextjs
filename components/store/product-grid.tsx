@@ -14,30 +14,30 @@ function pageHref(q: string, page: number): string {
 
 export function ProductGrid({ items, pagination, q }: { items: Product[]; pagination: Pagination; q: string }) {
   if (items.length === 0) {
-    return <p className="text-sm text-muted-foreground">No products found.</p>
+    return <p className="py-12 text-center text-sm text-muted-foreground">No products found.</p>
   }
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
         {items.map((p) => (
           <ProductCard key={p._id} product={p} />
         ))}
       </div>
       {pagination.totalPages > 1 ? (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-center gap-4 pt-2">
           <span className="text-sm text-muted-foreground">Page {pagination.page} of {pagination.totalPages}</span>
           <div className="flex gap-2">
             <Link
               href={pageHref(q, pagination.page - 1)}
               aria-disabled={!pagination.hasPreviousPage}
-              className={cn(buttonVariants({ variant: 'outline' }), !pagination.hasPreviousPage && 'pointer-events-none opacity-50')}
+              className={cn(buttonVariants({ variant: 'outline' }), 'h-9 rounded-xl border-brand px-4 text-brand hover:bg-brand-soft hover:text-brand', !pagination.hasPreviousPage && 'pointer-events-none opacity-50')}
             >
               Previous
             </Link>
             <Link
               href={pageHref(q, pagination.page + 1)}
               aria-disabled={!pagination.hasNextPage}
-              className={cn(buttonVariants({ variant: 'outline' }), !pagination.hasNextPage && 'pointer-events-none opacity-50')}
+              className={cn(buttonVariants({ variant: 'outline' }), 'h-9 rounded-xl border-brand px-4 text-brand hover:bg-brand-soft hover:text-brand', !pagination.hasNextPage && 'pointer-events-none opacity-50')}
             >
               Next
             </Link>

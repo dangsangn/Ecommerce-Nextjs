@@ -59,7 +59,7 @@ export function CheckoutWizard({
               <div className="flex justify-between"><dt className="text-muted-foreground">Subtotal</dt><dd className="tabular-nums">{toPriceString(review.totalPrice)}</dd></div>
               <div className="flex justify-between"><dt className="text-muted-foreground">Discount</dt><dd className="tabular-nums">−{toPriceString(review.totalDiscount)}</dd></div>
               <div className="flex justify-between"><dt className="text-muted-foreground">Shipping</dt><dd className="tabular-nums">{toPriceString(review.feeShip)}</dd></div>
-              <div className="flex justify-between font-semibold"><dt>Total</dt><dd className="tabular-nums">{toPriceString(review.totalCheckout)}</dd></div>
+              <div className="flex justify-between font-semibold"><dt>Total</dt><dd className="text-base font-bold text-brand tabular-nums">{toPriceString(review.totalCheckout)}</dd></div>
             </dl>
             <Button onClick={() => setStep(1)}>Continue</Button>
           </div>

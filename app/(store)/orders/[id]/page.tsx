@@ -48,7 +48,7 @@ export default async function OrderDetailPage({
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">Order #{code}</h1>
+          <h1 className="text-2xl font-bold">Order #{code}</h1>
           <Badge variant={statusVariant(order.order_status)}>{order.order_status}</Badge>
         </div>
         <span className="text-sm text-muted-foreground">{formatOrderDate(order.createdAt)}</span>
@@ -78,7 +78,7 @@ export default async function OrderDetailPage({
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="tabular-nums">{toPriceString(checkout.totalPrice ?? 0)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="tabular-nums">-{toPriceString(checkout.totalDiscount ?? 0)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="tabular-nums">{toPriceString(checkout.feeShip ?? 0)}</span></div>
-            <div className="flex justify-between border-t pt-2 font-semibold"><span>Total</span><span className="tabular-nums">{toPriceString(checkout.totalCheckout ?? 0)}</span></div>
+            <div className="flex justify-between border-t pt-2 font-semibold"><span>Total</span><span className="text-base font-bold text-brand tabular-nums">{toPriceString(checkout.totalCheckout ?? 0)}</span></div>
           </CardContent>
         </Card>
 
