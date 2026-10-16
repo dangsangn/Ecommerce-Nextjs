@@ -16,11 +16,15 @@ export function buildHeaders(input: {
   apiKey: string
   json?: boolean
   session?: SessionHeaders
+  clientIp?: string
 }): Record<string, string> {
   const headers: Record<string, string> = { 'x-api-key': input.apiKey }
   if (input.json) headers['content-type'] = 'application/json'
   if (input.session?.clientId) headers['x-client-id'] = input.session.clientId
   if (input.session?.accessToken) headers['authorization'] = input.session.accessToken
+  // Browsers never reach the backend directly, so it cannot see who the user
+  // is. The backend only believes this header from a trusted API key.
+  if (input.clientIp) headers['x-end-user-ip'] = input.clientIp
   return headers
 }
 

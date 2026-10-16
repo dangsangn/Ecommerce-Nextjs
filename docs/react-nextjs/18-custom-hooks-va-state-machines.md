@@ -3,27 +3,23 @@
 > **Mục tiêu:** thiết kế custom hook ở mức API library, và mô hình hoá UI phức tạp thành
 > **state machine** để loại bỏ hẳn class bug "trạng thái không hợp lệ". Bài tập chính: viết lại
 > `checkout-wizard.tsx` thành một FSM có kiểu chặt và test được.
+>
+> Phiên bản: React 19.2 — `useEffectEvent` đã stable, `useActionState`, `<form action>` tự reset form.
 
 ---
 
 ## Phần I — Thiết kế Custom Hook
 
-## 1. Overview
+## 1. Custom hook KHÔNG phải để "tái sử dụng code"
 
-### Custom hook KHÔNG phải để "tái sử dụng code"
+Nếu chỉ để tái sử dụng, một hàm thường là đủ. **Custom hook tồn tại để làm ba việc hàm thường không làm
+được:**
 
-Đây là ngộ nhận phổ biến. Nếu mục đích chỉ là tái sử dụng, một hàm thường là đủ.
-
-**Custom hook tồn tại để làm ba việc mà hàm thường không làm được:**
-
-1. **Gọi được các hook khác** (`useState`, `useEffect`, `useContext`) — hàm thường không được
-2. **Đặt tên cho một khái niệm có trạng thái** — biến `useEffect(() => {...}, [state])` vô danh thành
-   `useActionToast(state)` có ý nghĩa
+1. **Gọi được các hook khác** (`useState`, `useEffect`, `use`…)
+2. **Đặt tên cho một khái niệm có trạng thái** — biến một `useEffect` vô danh thành `useActionToast(state)`
 3. **Đóng gói một hợp đồng** — "hook này quản lý vòng đời của X, bạn chỉ cần gọi nó"
 
-Điều **(2)** là lý do quan trọng nhất, và cũng là lý do bị đánh giá thấp nhất.
-
-📄 So sánh hai đoạn tương đương về hành vi:
+Điều **(2)** là lý do quan trọng nhất và bị đánh giá thấp nhất:
 
 ```tsx
 // Trước: người đọc phải giải mã ý định
@@ -36,363 +32,273 @@ useEffect(() => {
 useActionToast(detailsState)
 ```
 
-Dòng thứ hai không chỉ ngắn hơn. Nó nói **cái gì đang xảy ra** thay vì **cách nó xảy ra**. Người đọc
-code không cần biết có `useEffect` bên trong.
-
----
-
-## 2. Mental Model
-
 ### 🧠 Custom hook như một "cơ quan" của component
 
-Component là cơ thể. Hook là các cơ quan có chức năng riêng:
+Component là cơ thể; `useActionToast` là cơ quan thông báo, `useDisclosure` là cơ quan mở/đóng. Mỗi cơ
+quan tự quản trạng thái nội bộ, có giao diện rõ ràng (tham số vào, giá trị ra), và **có thể có nhiều
+bản**.
 
-- `useActionToast(state)` — cơ quan thông báo
-- `useDisclosure()` — cơ quan mở/đóng
-- `useCheckout(...)` — cơ quan điều phối luồng thanh toán
-
-Mỗi cơ quan:
-- **Tự quản trạng thái nội bộ** (bạn không cần biết bên trong)
-- **Có một giao diện rõ ràng** (input là tham số, output là giá trị trả về)
-- **Có thể có nhiều bản** trong cùng cơ thể (nhớ file `15`: mỗi lời gọi là một slot hook riêng)
-
-**Nhắc lại điểm quan trọng từ file `15`:** custom hook **không phải một đơn vị** ở tầng Fiber. React
-chỉ đếm số lời gọi hook nguyên thuỷ. Nghĩa là:
+Nhắc lại file `15`: custom hook **không phải một đơn vị** ở tầng Fiber — React chỉ đếm lời gọi hook
+nguyên thuỷ:
 
 ```tsx
 useActionToast(detailsState)    // = useEffect ở slot #k
-useActionToast(imagesState)     // = useEffect ở slot #k+1
+useActionToast(imagesState)     // = useEffect ở slot #k+1  → hai state độc lập
 ```
-
-Hai lời gọi → hai slot độc lập → hai state riêng. **Đây là tính chất, không phải may mắn.**
 
 ---
 
-## 3. Bốn nguyên tắc thiết kế hook
+## 2. Bốn nguyên tắc thiết kế hook
 
-### Nguyên tắc 1 — Tên bắt đầu bằng động từ hoặc danh từ chỉ khái niệm, không phải "get"
+### Nguyên tắc 1 — Tên nói khái niệm domain, không phải cơ chế
 
 | ❌ Tên tệ | ✅ Tên tốt | Vì sao |
 | --- | --- | --- |
 | `useData()` | `useOrderDetail(id)` | "Data" không nói gì |
 | `useUtils()` | `usePriceFormatter()` | Hook không phải túi đựng hàm |
-| `useLogic()` | `useCheckoutFlow()` | Nói được domain |
-| `useHandler()` | `useOptimisticCart()` | Nói được nó làm gì |
-| `useGetCart()` | `useCart()` | "get" là dư — hook luôn "get" |
+| `useLogic()` | `useCheckoutWizard()` | Nói được domain |
+| `useGetCart()` | `useCart()` | "get" là dư |
 
-### Nguyên tắc 2 — Chọn shape trả về theo số lượng và tính đối xứng
+Và: **hàm không gọi hook nào thì KHÔNG được đặt tên `use…`** — lint và React Compiler coi tiền tố
+`use` là cam kết tuân theo Rules of Hooks.
 
-```tsx
-// TUPLE — khi có 2 giá trị và người dùng thường đổi tên
-const [state, formAction] = useActionState(...)      // ✅ đổi tên thoải mái
-const [open, setOpen] = useState(false)               // ✅
-
-// OBJECT — khi có 3+ giá trị, hoặc một số là tuỳ chọn
-const { open, close, toggle, triggerProps, panelProps } = useDisclosure()   // ✅
-```
-
-**Ranh giới:** 2 giá trị đối xứng (value + setter) → tuple. Nhiều hơn, hoặc không đối xứng → object.
-
-Vì sao? Với tuple 5 phần tử, call site phải nhớ **thứ tự**:
+### Nguyên tắc 2 — Tuple cho 2 giá trị đối xứng, object cho 3+
 
 ```tsx
-// ❌ Không đọc được, và thêm giá trị mới là breaking change
+const [open, setOpen] = useState(false)                                  // ✅ tuple — đổi tên thoải mái
+const { open, close, toggle, triggerProps, panelProps } = useDisclosure() // ✅ object
+
+// ❌ Tuple 5 phần tử: phải nhớ thứ tự, thêm giá trị = breaking change
 const [step, setStep, address, setAddress, method] = useWizard()
 ```
 
-Với object, thêm field là **thay đổi tương thích**.
+### Nguyên tắc 3 — Hàm trả về phải có identity ổn định
 
-### Nguyên tắc 3 — Trả về identity ổn định cho hàm
-
-Nếu hook trả về hàm mà consumer đưa vào dependency array, hàm đó **phải** ổn định:
+Nếu consumer đưa hàm vào dependency array hoặc truyền cho component `memo`, hàm **phải** ổn định:
 
 ```tsx
-// ❌ close/toggle là hàm MỚI mỗi render → phá dependency array của consumer
-export function useDisclosure() {
-  const [open, setOpen] = useState(false)
-  return {
-    open,
-    close: () => setOpen(false),        // mới mỗi render
-    toggle: () => setOpen(o => !o),      // mới mỗi render
-  }
-}
+// ❌ close/toggle là hàm MỚI mỗi render
+return { open, close: () => setOpen(false), toggle: () => setOpen((o) => !o) }
 
-// ✅ Ổn định qua useCallback với deps rỗng
-export function useDisclosure() {
-  const [open, setOpen] = useState(false)
-  const close = useCallback(() => setOpen(false), [])
-  const toggle = useCallback(() => setOpen((o) => !o), [])
-  return { open, close, toggle }
-}
+// ✅ useCallback + deps rỗng
+const close = useCallback(() => setOpen(false), [])
+const toggle = useCallback(() => setOpen((o) => !o), [])
 ```
 
-⚠️ **Chú ý `setOpen((o) => !o)` — dạng updater.** Nếu viết `setOpen(!open)` thì `open` phải vào
-dependency array của `useCallback` → hàm không còn ổn định. **Dạng updater là điều kiện để identity
-ổn định.**
+⚠️ **`setOpen((o) => !o)` — dạng updater là điều kiện để identity ổn định.** Viết `setOpen(!open)` thì
+`open` phải vào deps → hàm đổi mỗi lần `open` đổi.
 
-Đây là một trong ít trường hợp `useCallback` **thực sự cần thiết** (nhớ file `04`: chỉ dùng khi hàm
-đi vào dependency array hoặc component đã `memo`). Trong một hook công khai, bạn **không biết** consumer
-sẽ dùng thế nào — nên phải phòng.
+Trong hook **công khai** bạn không biết consumer dùng thế nào, nên đây là một trong ít chỗ `useCallback`
+thật sự cần (file `04`). Nếu bật React Compiler (`reactCompiler: true` trong `next.config.ts`, stable từ Next 16, cần cài
+`babel-plugin-react-compiler` — repo hiện **chưa** bật), compiler tự memo hoá và phần lớn `useCallback` thủ công trở nên thừa.
 
 ### Nguyên tắc 4 — Một hook, một trách nhiệm
 
 ```tsx
-// ❌ Hook "Chúa" — làm mọi thứ, không tái dùng được phần nào
-function useCheckoutEverything() {
-  // fetch cart, validate address, chọn payment, submit order, toast, redirect...
-}
+// ❌ Hook "Chúa": fetch cart, validate address, payment, submit, toast, redirect...
+function useCheckoutEverything() {}
 
 // ✅ Hook nhỏ, compose được
-function useAddressForm() { /* ... */ }
-function usePaymentMethod() { /* ... */ }
-function useCheckoutFlow() {                    // ← compose từ các hook nhỏ
+function useCheckoutWizard() {
   const address = useAddressForm()
   const payment = usePaymentMethod()
   // ...
 }
 ```
 
-Hook compose được là hook có giá trị. Hook làm mọi thứ chỉ là một component viết ngược.
-
 ---
 
-## 4. Ba hook đáng thêm vào repo này
+## 3. Ba hook đáng thêm vào repo này
 
-### 4.1 `useActionToast` — đã đề xuất ở file `03`, giờ hoàn thiện
+### 3.1 `useActionToast` — callback của consumer qua `useEffectEvent`
 
 ```tsx
 // lib/hooks/use-action-toast.ts
 'use client'
-import { useEffect, useRef } from 'react'
+import { useEffect, useEffectEvent } from 'react'
 import { toast } from 'sonner'
 import type { ActionState } from '@/actions/state'
 
-interface Options {
-  /** Bỏ qua toast thành công (khi action redirect và trang đích tự toast). */
-  successSilent?: boolean
-  /** Gọi khi action thành công — ví dụ để reset form. */
-  onSuccess?: () => void
-}
-
 /**
  * Toast kết quả của một Server Action.
- *
- * Chạy lại mỗi khi `state` là object mới — useActionState luôn trả object mới
- * sau mỗi lần chạy, nên cùng một lỗi lặp lại vẫn toast.
- *
- * `onSuccess` được đọc qua ref nên KHÔNG cần identity ổn định ở call site,
- * và không gây chạy lại effect khi consumer truyền inline arrow function.
+ * Chạy lại mỗi khi `state` là object mới — action luôn trả object mới,
+ * nên cùng một lỗi lặp lại vẫn toast.
  */
-export function useActionToast(state: ActionState, options: Options = {}) {
-  const { successSilent = false } = options
-  const onSuccessRef = useRef(options.onSuccess)
-  onSuccessRef.current = options.onSuccess      // cập nhật mỗi render, không reactive
-
-  useEffect(() => {
-    if (!state.message && !state.ok) return     // trạng thái ban đầu — chưa chạy action
-    if (state.ok) {
-      if (!successSilent && state.message) toast.success(state.message)
-      onSuccessRef.current?.()
-    } else if (state.message) {
-      toast.error(state.message)
-    }
-  }, [state, successSilent])
-}
-```
-
-**Chú ý kỹ thuật `onSuccessRef`.** Đây là bản "tự làm" của `useEffectEvent` (file `03`):
-
-```tsx
-const onSuccessRef = useRef(options.onSuccess)
-onSuccessRef.current = options.onSuccess
-```
-
-Ghi vào ref **trong thân render**... nhưng file `15` nói không được chạm ref trong render?
-
-⚖️ **Đây là một ngoại lệ được cộng đồng chấp nhận, và cần hiểu rõ ranh giới:**
-
-- Việc ghi này **idempotent** — ghi lại cùng giá trị nhiều lần không đổi kết quả
-- Nó **không được đọc trong render** — chỉ đọc trong effect (sau commit)
-- Nếu render bị bỏ, ref có giá trị từ render bị bỏ — nhưng render tiếp theo sẽ ghi lại giá trị đúng
-  **trước khi** bất kỳ effect nào đọc nó
-
-Nếu bạn thấy không thoải mái (hoàn toàn hợp lý), dùng `useEffectEvent` của React 19.2 — nó chính là
-API chính thức cho việc này:
-
-```tsx
-import { useEffect, useEffectEvent } from 'react'
-
-export function useActionToast(state: ActionState, options: Options = {}) {
-  const { successSilent = false, onSuccess } = options
+export function useActionToast(
+  state: ActionState,
+  { successSilent = false, onSuccess }: { successSilent?: boolean; onSuccess?: () => void } = {},
+) {
+  // Đọc giá trị MỚI NHẤT của onSuccess, nhưng không phải dependency
   const handleSuccess = useEffectEvent(() => onSuccess?.())
 
   useEffect(() => {
-    if (!state.message && !state.ok) return
+    if (!state.message && !state.ok) return            // initialActionState — chưa chạy action
     if (state.ok) {
       if (!successSilent && state.message) toast.success(state.message)
       handleSuccess()
     } else if (state.message) {
       toast.error(state.message)
     }
-  }, [state, successSilent])
+  }, [state, successSilent])                           // ✅ KHÔNG có handleSuccess
 }
 ```
 
-**Áp dụng — `components/store/comment-form.tsx` trước và sau:**
+**`useEffectEvent` (stable từ React 19.2)** tách phần "phản ứng" (effect chạy lại khi `state` đổi) khỏi
+phần "đọc giá trị mới nhất" (`onSuccess`). Ba luật:
+
+- Chỉ gọi nó **bên trong effect** (hoặc effect event khác) — không gọi trong render, không truyền
+  xuống component con.
+- **Không** đưa vào dependency array (identity của nó cố ý không ổn định; lint plugin
+  `eslint-plugin-react-hooks` v6+ hiểu điều này).
+- Dùng cho logic **không** nên kích hoạt effect chạy lại — không phải để "lách" deps thật.
+
+> Trước 19.2, người ta làm bằng tay: `const ref = useRef(cb); ref.current = cb` trong thân render. Mẫu đó
+> **ghi ref trong render** — vi phạm luật render thuần (file `15`) và bị lint mới cảnh báo. Có
+> `useEffectEvent` rồi thì đừng dùng mẫu ref nữa.
+
+**📄 Áp dụng — `components/store/comment-form.tsx`:**
 
 ```tsx
-// TRƯỚC
-export function CommentForm({ productId, parentId, replyToUserId, onDone }) {
-  const [state, formAction] = useActionState(createCommentAction, initialActionState)
-  const ref = useRef<HTMLFormElement>(null)
-
-  useEffect(() => {
-    if (state.ok && state.message) {
-      toast.success(state.message)
-      ref.current?.reset()
-      onDone?.()
-    } else if (!state.ok && state.message) {
-      toast.error(state.message)
-    }
-  }, [state, onDone])
-  // ...
-}
+// TRƯỚC (hiện tại)
+useEffect(() => {
+  if (state.ok && state.message) {
+    toast.success(state.message)
+    ref.current?.reset()
+    onDone?.()
+  } else if (!state.ok && state.message) {
+    toast.error(state.message)
+  }
+}, [state, onDone])
 
 // SAU
-export function CommentForm({ productId, parentId, replyToUserId, onDone }) {
-  const [state, formAction] = useActionState(createCommentAction, initialActionState)
-  const ref = useRef<HTMLFormElement>(null)
-
-  useActionToast(state, {
-    onSuccess: () => {
-      ref.current?.reset()
-      onDone?.()
-    },
-  })
-  // ...
-}
+useActionToast(state, { onSuccess: () => onDone?.() })
 ```
 
-**Điểm cộng ẩn:** ở bản TRƯỚC, `onDone` nằm trong dependency array. `CommentSection` truyền
-`onDone={close}` — và `close` là `() => setReplyOpen(null)`, một **arrow function mới mỗi render**.
-Nghĩa là effect đó chạy lại mỗi lần `CommentSection` re-render. Bản SAU không có vấn đề đó vì
-`onSuccess` được đọc qua ref/`useEffectEvent`.
+**Điểm cộng ẩn:** ở bản TRƯỚC, `onDone` nằm trong deps. `CommentSection` truyền `onDone={close}`, với
+`const close = () => setReplyOpen(null)` — **arrow function mới mỗi render** → effect chạy lại mỗi lần
+`CommentSection` re-render (vô hại chỉ vì `state` không đổi nên không toast lại, nhưng là bẫy chờ nổ).
 
-Đây là loại bug im lặng mà một hook được thiết kế cẩn thận **loại bỏ hẳn** cho mọi call site.
+**Còn `ref.current?.reset()` đi đâu?** React 19: khi truyền **hàm** vào `<form action>`, sau khi action
+chạy xong (không throw), React **tự reset** các field uncontrolled. Dòng `reset()` thủ công là thừa.
 
-### 4.2 `useOptimisticList` — tổng quát hoá bài toán ở file `07`
+⚠️ Hệ quả ngược: form cũng bị reset khi action **trả về lỗi** (`{ ok: false }` vẫn là "chạy xong").
+Người dùng gõ bình luận dài, lỗi validate → mất hết. Cách giữ giá trị: trả lại dữ liệu đã nhập trong
+`ActionState` (thêm field `fields?: Record<string, string>` vào interface trong `actions/state.ts`)
+và dùng làm `defaultValue`:
+
+```tsx
+// action: return { ok: false, message: 'Nội dung quá ngắn', fields: { content: raw } }
+<Textarea name="content" defaultValue={state.fields?.content} key={state.fields?.content} />
+```
+
+### 3.2 `useOptimisticList` — tổng quát hoá bài toán ở file `07`
 
 ```tsx
 // lib/hooks/use-optimistic-list.ts
 'use client'
 import { useOptimistic } from 'react'
 
-/**
- * useOptimistic cho một danh sách được định danh bằng `id`.
- *
- * `serverItems` PHẢI là state thật từ Server Component — khi action gọi
- * revalidatePath và prop này đổi, optimistic overlay tự bị loại bỏ.
- */
-export function useOptimisticList<T extends { [K in IdKey]: string }, IdKey extends string = 'id'>(
-  serverItems: T[],
-  idKey: IdKey,
-) {
-  const [items, apply] = useOptimistic(
-    serverItems,
-    (current: T[], mutation: ListMutation<T, IdKey>): T[] => {
-      switch (mutation.type) {
-        case 'patch':
-          return current.map((it) =>
-            it[idKey] === mutation.id ? { ...it, ...mutation.patch } : it,
-          )
-        case 'remove':
-          return current.filter((it) => it[idKey] !== mutation.id)
-        case 'add':
-          return [...current, mutation.item]
-      }
-    },
-  )
-  return [items, apply] as const
-}
-
-export type ListMutation<T, IdKey extends string> =
-  | { type: 'patch'; id: string; patch: Partial<Omit<T, IdKey>> }
-  | { type: 'remove'; id: string }
+export type ListMutation<T, K extends keyof T> =
+  | { type: 'patch'; id: T[K]; patch: Partial<Omit<T, K>> }
+  | { type: 'remove'; id: T[K] }
   | { type: 'add'; item: T }
+
+/**
+ * `serverItems` PHẢI là dữ liệu thật từ Server Component — khi action gọi
+ * revalidatePath và prop này đổi, lớp optimistic tự bị bỏ.
+ */
+export function useOptimisticList<T, K extends keyof T>(serverItems: T[], idKey: K) {
+  return useOptimistic(serverItems, (current: T[], m: ListMutation<T, K>): T[] => {
+    switch (m.type) {
+      case 'patch':  return current.map((it) => (it[idKey] === m.id ? { ...it, ...m.patch } : it))
+      case 'remove': return current.filter((it) => it[idKey] !== m.id)
+      case 'add':    return [...current, m.item]
+    }
+  })
+}
 ```
 
-Dùng cho giỏ hàng:
-
 ```tsx
+// Giỏ hàng
 const [items, apply] = useOptimisticList(serverItems, 'productId')
-// apply({ type: 'patch', id: productId, patch: { quantity: next } })
-// apply({ type: 'remove', id: productId })
-```
+startTransition(async () => {
+  apply({ type: 'patch', id: productId, patch: { quantity: next } })
+  await updateQuantityAction(productId, current, next)
+})
 
-Và dùng lại **y nguyên** cho comment:
-
-```tsx
+// Bình luận — y nguyên hook
 const [comments, apply] = useOptimisticList(serverComments, 'id')
-// apply({ type: 'add', item: draftComment })
-// apply({ type: 'remove', id: commentId })
+apply({ type: 'add', item: draftComment })
 ```
 
-**Đây là abstraction đúng theo tiêu chí file `17`:** có **ba** ca dùng thật (cart, comments, product
-publish state), và shape hoàn toàn giống nhau — chỉ khác `idKey`.
+⚠️ `apply` (setter của `useOptimistic`) phải gọi **trong một Transition/Action** — gọi ngoài sẽ có
+warning và giá trị optimistic không giữ được.
 
-### 4.3 `useActionToast` + `useOptimisticList` compose được
+Abstraction này đạt tiêu chí file `17`: shape giống hệt nhau giữa các ca dùng (cart, comments, publish
+state của sản phẩm), chỉ khác `idKey`.
+
+### 3.3 `useOnlineStatus` — đăng ký store bên ngoài React bằng `useSyncExternalStore`
+
+Checkout cần cảnh báo khi mất mạng. Cách "tự nhiên" là `useState` + `useEffect` lắng nghe event —
+nhưng có hai vấn đề: render đầu luôn sai giá trị (state khởi tạo cứng), và trong concurrent rendering
+có thể **tearing** (hai component đọc cùng store thấy hai giá trị khác nhau). `useSyncExternalStore`
+là API chính thức cho mọi nguồn dữ liệu nằm **ngoài** React (browser API, localStorage, store tự viết):
 
 ```tsx
-// components/store/cart-items.tsx
+// lib/hooks/use-online-status.ts
 'use client'
-export function CartItems({ items: serverItems }: { items: CartProduct[] }) {
-  const [items, apply] = useOptimisticList(serverItems, 'productId')
-  return (
-    <div className="space-y-6">
-      <div>
-        {items.map((p) => (
-          <CartLine key={p.productId} product={p} apply={apply} />
-        ))}
-      </div>
-      <CartSummary items={items} />
-    </div>
+import { useSyncExternalStore } from 'react'
+
+// Khai báo NGOÀI hook → identity ổn định → không resubscribe mỗi render
+function subscribe(onChange: () => void) {
+  window.addEventListener('online', onChange)
+  window.addEventListener('offline', onChange)
+  return () => {
+    window.removeEventListener('online', onChange)
+    window.removeEventListener('offline', onChange)
+  }
+}
+
+export function useOnlineStatus() {
+  return useSyncExternalStore(
+    subscribe,
+    () => navigator.onLine,     // getSnapshot — client
+    () => true,                 // getServerSnapshot — SSR + hydrate: giả định online, tránh mismatch
   )
 }
 ```
 
-Hai hook độc lập, compose tự nhiên, mỗi cái một trách nhiệm.
+```tsx
+const online = useOnlineStatus()
+// ...
+{!online ? <p role="status" className="text-sm text-destructive">Bạn đang offline — chưa thể đặt hàng.</p> : null}
+<SubmitButton disabled={!online}>Đặt hàng</SubmitButton>
+```
+
+⚠️ `getSnapshot` phải trả **cùng giá trị** nếu store không đổi (so sánh bằng `Object.is`). Trả về
+object mới mỗi lần (`() => ({ online: navigator.onLine })`) → vòng lặp render vô hạn.
 
 ---
 
-## 5. When NOT to make a custom hook
+## 4. When NOT to make a custom hook
 
 | Tình huống | Dùng gì thay thế |
 | --- | --- |
-| Không gọi hook nào bên trong | **Hàm thường** trong `lib/` — test được không cần React |
-| Chỉ dùng ở một chỗ và không có tên rõ ràng | Để inline. Hook một-lần-dùng chỉ thêm một file phải mở |
-| Chỉ để "gom code cho gọn" | Tách component thay vì tách hook |
-| Wrap một hook duy nhất mà không thêm gì | `useCart = () => useContext(CartContext)` — vô nghĩa nếu không thêm guard |
+| Không gọi hook nào bên trong | **Hàm thường** trong `lib/` — test không cần React |
+| Chỉ dùng một chỗ, không có tên rõ ràng | Để inline |
+| Chỉ để "gom code cho gọn" | Tách component |
+| Bọc một hook duy nhất mà không thêm gì | Bỏ — trừ khi thêm guard |
 
-📄 Ví dụ **không** nên làm hook, từ repo:
+📄 `lib/comments/group.ts` — `groupComments(list)` **đúng** là hàm thường: không gọi hook, có test
+riêng (`lib/comments/__tests__/group.test.ts`), dùng được cả trong Server Component. Bọc thành
+`useGroupedComments` chỉ mất ba thứ đó.
 
-```tsx
-// lib/comments/group.ts — ĐÚNG là hàm thường
-export function groupComments(list: Comment[]) { /* ... */ }
-```
-
-Không gọi hook nào. Nếu bọc thành `useGroupedComments(list)`:
-- ❌ Không test được mà không render component
-- ❌ Không dùng được trong Server Component
-- ❌ Không thêm giá trị gì
-
-Repo để nó là hàm thường và có test 33 dòng — **đúng**.
-
-📄 Ngược lại, một wrapper hook **có** giá trị khi nó thêm guard (file `05`):
+Wrapper **có** giá trị khi thêm guard:
 
 ```tsx
-// ✅ Thêm giá trị: fail-fast khi thiếu Provider
+// ✅ fail-fast khi thiếu Provider (đề xuất — repo chưa có CartContext)
 export function useCart(): CartValue {
-  const ctx = useContext(CartContext)
+  const ctx = use(CartContext)
   if (!ctx) throw new Error('useCart must be used inside <CartProvider>')
   return ctx
 }
@@ -402,67 +308,51 @@ export function useCart(): CartValue {
 
 ## Phần II — State Machines
 
-## 6. Overview
+## 5. Vấn đề: số trạng thái tăng theo lũy thừa
 
-### Vấn đề: số trạng thái tăng theo lũy thừa
-
-📄 `components/store/checkout-wizard.tsx`:
+📄 `components/store/checkout-wizard.tsx` hiện tại:
 
 ```tsx
 const [step, setStep] = useState(0)
 const [address, setAddress] = useState({ street: '', city: '', state: '', country: '' })
 const [method, setMethod] = useState('COD')
 const [state, formAction] = useActionState(placeOrderAction, initialActionState)
+
+useEffect(() => {
+  if (!state.ok && state.message) toast.error(state.message)
+}, [state])
+
+const addressComplete = address.street && address.city && address.state && address.country
 ```
-
-Hãy đếm số tổ hợp trạng thái mà **kiểu dữ liệu cho phép**:
-
-| Biến | Số giá trị hợp lệ theo kiểu |
-| --- | --- |
-| `step` | `number` → **vô hạn** (nhưng chỉ 0,1,2 có nghĩa) |
-| `address` | 4 chuỗi tuỳ ý → vô hạn |
-| `method` | `string` → **vô hạn** (nhưng chỉ COD/CARD/MOMO có nghĩa) |
-| `state` | `{ok, message?}` → 3-4 trạng thái thực |
 
 Kiểu hiện tại cho phép các trạng thái **vô nghĩa**:
 
 ```tsx
-{ step: 2, address: { street: '', city: '', state: '', country: '' }, method: 'COD' }
-// Ở bước xác nhận nhưng địa chỉ TRỐNG — không nên tồn tại
-
-{ step: 5, ... }                 // bước không tồn tại
-{ method: 'BITCOIN', ... }       // phương thức không hỗ trợ
-{ step: 0, state: { ok: true } } // đã đặt hàng thành công nhưng vẫn ở bước review??
+{ step: 2, address: { street: '', city: '', state: '', country: '' } }  // xác nhận với địa chỉ TRỐNG
+{ step: 5 }                                                               // bước không tồn tại
+{ method: 'BITCOIN' }                                                     // `string` nhận mọi thứ
 ```
 
-Repo hiện chặn chúng bằng **luật rải trong JSX**:
+Repo chặn chúng bằng **luật rải trong JSX**:
 
 ```tsx
-const addressComplete = address.street && address.city && address.state && address.country
-// ...
 <Button onClick={() => setStep(2)} disabled={!addressComplete}>Continue</Button>
 ```
 
-⚠️ **`disabled` là bảo vệ ở tầng UI, không phải tầng dữ liệu.** Nếu ai đó thêm một đường vào step 2
-(deep link, nút "Sửa" từ bước 3, khôi phục từ localStorage), luật này **không được áp dụng**.
+⚠️ **`disabled` là bảo vệ ở tầng UI, không phải tầng dữ liệu.** Thêm một đường vào step 2 (deep link,
+nút "Sửa", khôi phục từ localStorage) là luật này **không được áp dụng**.
 
 ### State machine là gì
 
-Một FSM (finite state machine) định nghĩa:
-
-- **Một tập hữu hạn state** — và tại một thời điểm hệ thống ở **đúng một** state
+- **Tập hữu hạn state** — tại một thời điểm ở **đúng một** state
 - **Dữ liệu gắn với từng state** — mỗi state chỉ mang dữ liệu có nghĩa với nó
-- **Các transition được phép** — từ state A, event E dẫn tới state B
-- **Mọi thứ khác là không thể** — không phải "bị chặn", mà là **không biểu diễn được**
-
----
-
-## 7. Mental Model
+- **Transition được phép** — từ state A, event E dẫn tới state B
+- **Mọi thứ khác không biểu diễn được** — không phải "bị chặn"
 
 ### 🧠 FSM như một sơ đồ tàu điện
 
-Bạn ở một **ga** (state). Từ ga đó có **một số tuyến** đi ga khác (transition). Không có tuyến thì
-không đi được — không phải "có tuyến nhưng bị chặn", mà là **không có đường ray**.
+Bạn ở một **ga** (state). Không có tuyến thì không đi được — không phải "có tuyến nhưng bị chặn", mà là
+**không có đường ray**.
 
 ```mermaid
 stateDiagram-v2
@@ -474,50 +364,35 @@ stateDiagram-v2
     Confirming --> Submitting: SUBMIT
     Submitting --> Failed: ERROR
     Submitting --> [*]: SUCCESS (redirect /orders)
-    Failed --> Confirming: RETRY
+    Failed --> Submitting: SUBMIT (thử lại)
+    Failed --> Addressing: BACK
 ```
 
-Đọc sơ đồ này bạn thấy ngay điều gì **không** có:
-
-- Không có `Reviewing → Confirming` (không nhảy qua bước địa chỉ)
-- Không có `Submitting → Addressing` (không sửa địa chỉ khi đang gửi)
-- Không có `Confirming → Reviewing` (chỉ lùi một bước)
-
-Trong code hiện tại, cả ba đều **có thể** xảy ra vì `setStep` nhận bất kỳ số nào.
+Đọc sơ đồ là thấy điều **không** có: không `Reviewing → Confirming` (nhảy qua địa chỉ), không
+`Submitting → Addressing` (sửa địa chỉ khi đang gửi). Code hiện tại cho phép cả hai vì `setStep` nhận
+mọi số.
 
 ---
 
-## 8. 🛠️ Bài tập lớn: `checkout-wizard` thành FSM
+## 6. 🛠️ Bài tập lớn: `checkout-wizard` thành FSM
 
-### Bước 1 — Định nghĩa state bằng discriminated union
+### Bước 1 — State bằng discriminated union
 
 ```tsx
 // lib/checkout/wizard-machine.ts
-import type { CheckoutOrder, OrderProduct, ShopOrderItem } from '@/types/order'
-
 export const PAYMENT_METHODS = ['COD', 'CARD', 'MOMO'] as const
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number]
 
-export interface Address {
-  street: string
-  city: string
-  state: string
-  country: string
-}
+export interface Address { street: string; city: string; state: string; country: string }
 
-/** Địa chỉ đã được xác nhận là đầy đủ — brand type, xem file `21`. */
+/** Địa chỉ đã xác nhận là đầy đủ — brand type (file `21`). */
 export type CompleteAddress = Address & { readonly __complete: unique symbol }
 
 export function isAddressComplete(a: Address): a is CompleteAddress {
   return Boolean(a.street.trim() && a.city.trim() && a.state.trim() && a.country.trim())
 }
 
-/**
- * State của wizard. Mỗi nhánh chỉ mang dữ liệu CÓ NGHĨA với nó.
- *
- * Chú ý: `Confirming` và `Submitting` yêu cầu `CompleteAddress`, nên
- * KHÔNG THỂ tạo ra một state "đang xác nhận với địa chỉ trống".
- */
+/** Mỗi nhánh chỉ mang dữ liệu CÓ NGHĨA với nó. */
 export type WizardState =
   | { status: 'reviewing'; address: Address; method: PaymentMethod }
   | { status: 'addressing'; address: Address; method: PaymentMethod }
@@ -526,21 +401,20 @@ export type WizardState =
   | { status: 'failed'; address: CompleteAddress; method: PaymentMethod; error: string }
 ```
 
-**Đây là điểm cốt lõi của cả chương.** So sánh:
+**Điểm cốt lõi của chương:**
 
 ```tsx
-// Kiểu cũ: state 'confirming' với địa chỉ trống là HỢP LỆ theo TypeScript
+// Kiểu cũ: hợp lệ theo TypeScript
 { step: 2, address: { street: '', city: '', state: '', country: '' } }   // ✅ compile
 
 // Kiểu mới: KHÔNG BIỂU DIỄN ĐƯỢC
-{ status: 'confirming', address: { street: '', ... } }
+{ status: 'confirming', address: { street: '', /* ... */ } }
 // ❌ Type error: Property '__complete' is missing
 ```
 
-Bug không bị "chặn" — nó **không tồn tại**. Đây là "make illegal states unrepresentable" ở dạng đầy đủ
-(nhớ lại file `02`, mục về `string | null`).
+Bug không bị "chặn" — nó **không tồn tại**. "Make illegal states unrepresentable" (file `02`).
 
-### Bước 2 — Định nghĩa event
+### Bước 2 — Event
 
 ```tsx
 export type WizardEvent =
@@ -550,24 +424,19 @@ export type WizardEvent =
   | { type: 'SET_METHOD'; method: PaymentMethod }
   | { type: 'SUBMIT' }
   | { type: 'ERROR'; message: string }
-  | { type: 'RETRY' }
 ```
 
 ### Bước 3 — Reducer: bảng transition tường minh
 
 ```tsx
-export function wizardReducer(state: WizardState, event: WizardEvent): WizardState {
-  switch (state.status) {
-    // ---------- REVIEWING ----------
-    case 'reviewing':
-      switch (event.type) {
-        case 'CONTINUE':
-          return { status: 'addressing', address: state.address, method: state.method }
-        default:
-          return state                        // mọi event khác bị BỎ QUA, không crash
-      }
+import { assertNever } from '@/lib/type-utils'
 
-    // ---------- ADDRESSING ----------
+export function wizardReducer(state: WizardState, event: WizardEvent): WizardState {
+  const { address, method } = state
+  switch (state.status) {
+    case 'reviewing':
+      return event.type === 'CONTINUE' ? { status: 'addressing', address, method } : state
+
     case 'addressing':
       switch (event.type) {
         case 'SET_ADDRESS_FIELD':
@@ -575,352 +444,202 @@ export function wizardReducer(state: WizardState, event: WizardEvent): WizardSta
         case 'SET_METHOD':
           return { ...state, method: event.method }
         case 'BACK':
-          return { status: 'reviewing', address: state.address, method: state.method }
+          return { status: 'reviewing', address, method }
         case 'CONTINUE':
-          // GUARD: chỉ đi tiếp khi địa chỉ đủ. Type guard cũng NÂNG KIỂU cho ta.
+          // GUARD + type guard NÂNG KIỂU: sau if, state.address là CompleteAddress
           if (!isAddressComplete(state.address)) return state
-          return { status: 'confirming', address: state.address, method: state.method }
+          return { status: 'confirming', address: state.address, method }
         default:
           return state
       }
 
-    // ---------- CONFIRMING ----------
     case 'confirming':
-      switch (event.type) {
-        case 'BACK':
-          return { status: 'addressing', address: state.address, method: state.method }
-        case 'SUBMIT':
-          return { status: 'submitting', address: state.address, method: state.method }
-        default:
-          return state
-      }
+      if (event.type === 'BACK') return { status: 'addressing', address: state.address, method }
+      if (event.type === 'SUBMIT') return { status: 'submitting', address: state.address, method }
+      return state
 
-    // ---------- SUBMITTING ----------
     case 'submitting':
-      switch (event.type) {
-        case 'ERROR':
-          return { status: 'failed', address: state.address, method: state.method, error: event.message }
-        // BACK/CONTINUE bị bỏ qua có chủ đích: không cho sửa khi đang gửi
-        default:
-          return state
-      }
+      // BACK / SET_* bị bỏ qua có chủ đích: không sửa khi đang gửi
+      if (event.type === 'ERROR') return { status: 'failed', address: state.address, method, error: event.message }
+      return state
 
-    // ---------- FAILED ----------
     case 'failed':
-      switch (event.type) {
-        case 'RETRY':
-          return { status: 'confirming', address: state.address, method: state.method }
-        case 'BACK':
-          return { status: 'addressing', address: state.address, method: state.method }
-        default:
-          return state
-      }
+      if (event.type === 'SUBMIT') return { status: 'submitting', address: state.address, method }
+      if (event.type === 'BACK') return { status: 'addressing', address: state.address, method }
+      return state
+
+    default:
+      return assertNever(state)        // ⭐ thêm status mới mà quên case → lỗi compile
   }
 }
 
-export function initialWizardState(): WizardState {
-  return {
-    status: 'reviewing',
-    address: { street: '', city: '', state: '', country: '' },
-    method: 'COD',
-  }
+export const initialWizardState = (): WizardState => ({
+  status: 'reviewing',
+  address: { street: '', city: '', state: '', country: '' },
+  method: 'COD',
+})
+```
+
+```tsx
+// lib/type-utils.ts
+export function assertNever(x: never): never {
+  throw new Error(`Unhandled case: ${JSON.stringify(x)}`)
 }
 ```
 
-**Bốn điều đáng chú ý:**
-
-**(1) `default: return state` — event không hợp lệ bị bỏ qua, không crash.** Đây là hành vi đúng cho UI:
-nếu người dùng bấm nút hai lần nhanh, event thứ hai vào state đã đổi và không làm gì.
-
-**(2) Guard nằm trong reducer, không trong JSX.** `if (!isAddressComplete(...)) return state`.
-Giờ luật này áp dụng cho **mọi** đường vào `confirming`, không chỉ đường qua cái nút.
-
-**(3) `isAddressComplete` là type guard, nên nó vừa kiểm tra vừa NÂNG KIỂU.** Sau dòng `if`,
-TypeScript biết `state.address` là `CompleteAddress` — nên `return { status: 'confirming', address: state.address }`
-compile được. Không có type guard, bạn phải cast (`as CompleteAddress`) và mất luôn tính bảo đảm.
-
-**(4) Nhìn `case 'submitting'` là thấy ngay: không có transition nào sửa address hay method.**
-Luật "không sửa dữ liệu khi đang gửi" trở nên **đọc được từ code**, không cần comment.
+1. **`return state` cho event không hợp lệ** — bấm nút hai lần nhanh, event thứ hai rơi vào state đã đổi
+   và không làm gì.
+2. **Guard nằm trong reducer**, nên áp dụng cho **mọi** đường vào `confirming`, không chỉ một cái nút.
+3. **`isAddressComplete` là type guard** — vừa kiểm tra vừa nâng kiểu. Không có nó, bạn phải cast
+   `as CompleteAddress` và mất bảo đảm.
+4. **Nhìn `case 'submitting'` là thấy luật** "không sửa dữ liệu khi đang gửi" — không cần comment.
+5. **`assertNever`** bắt case thiếu **lúc compile** — thứ test không làm được (test chỉ kiểm tra những gì
+   bạn nghĩ ra). Tương tự cho map: `const TITLES: Record<WizardState['status'], string> = {…}` thiếu key
+   là lỗi compile.
 
 ### Bước 4 — Test reducer như hàm pure, KHÔNG cần React
-
-Đây là lợi ích thực tế lớn nhất:
 
 ```tsx
 // lib/checkout/__tests__/wizard-machine.test.ts
 import { describe, it, expect } from 'vitest'
-import {
-  wizardReducer,
-  initialWizardState,
-  isAddressComplete,
-  type WizardState,
-  type Address,
-} from '@/lib/checkout/wizard-machine'
+import { wizardReducer, initialWizardState, isAddressComplete, type WizardState, type WizardEvent,
+  type Address, type CompleteAddress } from '@/lib/checkout/wizard-machine'
 
-const FULL: Address = { street: '1 Lê Lợi', city: 'HCM', state: 'HCM', country: 'VN' }
-const EMPTY: Address = { street: '', city: '', state: '', country: '' }
-
-/** Helper: đi qua một chuỗi event từ state ban đầu. */
-function run(events: Parameters<typeof wizardReducer>[1][], from = initialWizardState()): WizardState {
-  return events.reduce(wizardReducer, from)
-}
+const FULL = { street: '1 Lê Lợi', city: 'HCM', state: 'HCM', country: 'VN' } as CompleteAddress
+const run = (events: WizardEvent[], from: WizardState = initialWizardState()) => events.reduce(wizardReducer, from)
+const fill = (a: Address): WizardEvent[] =>
+  (Object.keys(a) as (keyof Address)[]).map((field) => ({ type: 'SET_ADDRESS_FIELD', field, value: a[field] }))
 
 describe('isAddressComplete', () => {
-  it('true khi đủ 4 field', () => {
+  it('false khi thiếu field hoặc chỉ có khoảng trắng', () => {
     expect(isAddressComplete(FULL)).toBe(true)
-  })
-  it('false khi thiếu field', () => {
     expect(isAddressComplete({ ...FULL, city: '' })).toBe(false)
-  })
-  it('false khi chỉ có khoảng trắng', () => {
     expect(isAddressComplete({ ...FULL, street: '   ' })).toBe(false)
   })
 })
 
-describe('wizardReducer — happy path', () => {
-  it('reviewing → addressing → confirming → submitting', () => {
-    let s = run([{ type: 'CONTINUE' }])
+describe('wizardReducer', () => {
+  it('happy path: reviewing → addressing → confirming → submitting', () => {
+    const s = run([{ type: 'CONTINUE' }, ...fill(FULL), { type: 'CONTINUE' }, { type: 'SUBMIT' }])
+    expect(s.status).toBe('submitting')
+  })
+
+  it('guard: KHÔNG vào confirming khi thiếu một field', () => {
+    const s = run([{ type: 'CONTINUE' }, ...fill({ ...FULL, country: '' }), { type: 'CONTINUE' }])
     expect(s.status).toBe('addressing')
+  })
 
-    s = run(
-      (Object.keys(FULL) as (keyof Address)[]).map((field) => ({
-        type: 'SET_ADDRESS_FIELD' as const, field, value: FULL[field],
-      })),
-      s,
-    )
-    s = wizardReducer(s, { type: 'CONTINUE' })
-    expect(s.status).toBe('confirming')
+  it('không sửa được address khi đang submitting', () => {
+    const s = run([{ type: 'SET_ADDRESS_FIELD', field: 'city', value: 'HÀ NỘI' }, { type: 'BACK' }],
+      { status: 'submitting', address: FULL, method: 'COD' })
+    expect(s.status).toBe('submitting')
+    expect(s.address.city).toBe('HCM')
+  })
 
+  it('ERROR → failed giữ nguyên dữ liệu; SUBMIT lại → submitting', () => {
+    let s = wizardReducer({ status: 'submitting', address: FULL, method: 'MOMO' }, { type: 'ERROR', message: 'Hết hàng' })
+    expect(s).toMatchObject({ status: 'failed', error: 'Hết hàng', method: 'MOMO' })
     s = wizardReducer(s, { type: 'SUBMIT' })
     expect(s.status).toBe('submitting')
   })
 })
-
-describe('wizardReducer — guard', () => {
-  it('KHÔNG cho vào confirming khi địa chỉ trống', () => {
-    const s = run([{ type: 'CONTINUE' }, { type: 'CONTINUE' }])
-    expect(s.status).toBe('addressing')        // vẫn ở addressing, không nhảy
-  })
-  it('KHÔNG cho vào confirming khi thiếu MỘT field', () => {
-    let s = run([{ type: 'CONTINUE' }])
-    s = wizardReducer(s, { type: 'SET_ADDRESS_FIELD', field: 'street', value: '1 Lê Lợi' })
-    s = wizardReducer(s, { type: 'SET_ADDRESS_FIELD', field: 'city', value: 'HCM' })
-    s = wizardReducer(s, { type: 'SET_ADDRESS_FIELD', field: 'state', value: 'HCM' })
-    // thiếu country
-    s = wizardReducer(s, { type: 'CONTINUE' })
-    expect(s.status).toBe('addressing')
-  })
-})
-
-describe('wizardReducer — transition bị cấm', () => {
-  it('không nhảy từ reviewing sang confirming', () => {
-    // Không có event nào làm được điều này — kiểm tra bằng cách thử mọi event
-    const s = initialWizardState()
-    const events = [
-      { type: 'SUBMIT' }, { type: 'BACK' }, { type: 'RETRY' },
-      { type: 'ERROR', message: 'x' },
-    ] as const
-    for (const e of events) {
-      expect(wizardReducer(s, e).status).toBe('reviewing')
-    }
-  })
-
-  it('không sửa được address khi đang submitting', () => {
-    let s: WizardState = { status: 'submitting', address: FULL as never, method: 'COD' }
-    s = wizardReducer(s, { type: 'SET_ADDRESS_FIELD', field: 'city', value: 'HÀ NỘI' })
-    expect(s.status).toBe('submitting')
-    expect(s.address.city).toBe('HCM')          // KHÔNG đổi
-  })
-
-  it('không lùi được khi đang submitting', () => {
-    const s: WizardState = { status: 'submitting', address: FULL as never, method: 'COD' }
-    expect(wizardReducer(s, { type: 'BACK' }).status).toBe('submitting')
-  })
-})
-
-describe('wizardReducer — xử lý lỗi', () => {
-  it('submitting + ERROR → failed, giữ nguyên dữ liệu', () => {
-    const s = wizardReducer(
-      { status: 'submitting', address: FULL as never, method: 'MOMO' },
-      { type: 'ERROR', message: 'Hết hàng' },
-    )
-    expect(s.status).toBe('failed')
-    if (s.status === 'failed') {
-      expect(s.error).toBe('Hết hàng')
-      expect(s.method).toBe('MOMO')             // dữ liệu KHÔNG mất
-      expect(s.address.city).toBe('HCM')
-    }
-  })
-
-  it('failed + RETRY → về confirming, KHÔNG mất địa chỉ', () => {
-    const s = wizardReducer(
-      { status: 'failed', address: FULL as never, method: 'COD', error: 'Hết hàng' },
-      { type: 'RETRY' },
-    )
-    expect(s.status).toBe('confirming')
-    expect(s.address.street).toBe('1 Lê Lợi')
-  })
-})
 ```
 
-**Đây là 60 dòng test cho toàn bộ luồng checkout — không có `render()`, không jsdom, không mock.**
-Chạy trong vài millisecond với cấu hình `environment: 'node'` hiện tại của repo.
+Không `render()`, không jsdom, không mock — chạy được ngay với `environment: 'node'` hiện tại của repo
+(`vitest.config.ts`). Test cùng logic qua component cần jsdom + RTL + mock `placeOrderAction`, chậm hơn
+nhiều, và **không cover được** transition bị cấm (UI không có nút để thử).
 
-So sánh với việc test cùng logic đó qua component: cần jsdom, React Testing Library, `fireEvent` cho
-từng click, `waitFor` cho async, và mock cả `placeOrderAction` + `toast`. Khoảng 200 dòng, chạy chậm
-hơn 100 lần, và **vẫn không cover được** các transition bị cấm (vì UI không có nút để thử).
-
-### Bước 5 — Component trở thành hàm render thuần
+### Bước 5 — Hook điều phối: nối machine với Server Action
 
 ```tsx
-// components/store/checkout-wizard.tsx
+// lib/hooks/use-checkout-wizard.ts
 'use client'
-import { useReducer, useEffect } from 'react'
+import { useActionState, useReducer } from 'react'
 import { placeOrderAction } from '@/actions/order.actions'
-import { initialActionState } from '@/actions/state'
-import { useActionState } from 'react'
-import { toPriceString } from '@/lib/products/price'
-import {
-  wizardReducer,
-  initialWizardState,
-  isAddressComplete,
-  PAYMENT_METHODS,
-  type Address,
-  type PaymentMethod,
-} from '@/lib/checkout/wizard-machine'
-import { SubmitButton } from '@/components/auth/submit-button'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { CheckoutOrder, OrderProduct, ShopOrderItem } from '@/types/order'
+import { initialActionState, type ActionState } from '@/actions/state'
+import { wizardReducer, initialWizardState, isAddressComplete, type Address, type PaymentMethod }
+  from '@/lib/checkout/wizard-machine'
 
-const TITLES = {
+export function useCheckoutWizard() {
+  const [state, send] = useReducer(wizardReducer, undefined, initialWizardState)
+
+  // ✅ Bọc action thay vì dùng useEffect để "đồng bộ" actionState → machine.
+  // Effect đồng bộ state là anti-pattern (file 03): thêm một render, và chạy muộn.
+  const [, formAction] = useActionState(async (prev: ActionState, formData: FormData) => {
+    const result = await placeOrderAction(prev, formData)   // thành công → redirect, không quay lại đây
+    if (!result.ok) send({ type: 'ERROR', message: result.message ?? 'Đặt hàng không thành công' })
+    return result
+  }, initialActionState)
+
+  return {
+    state,
+    formAction,
+    // dispatch của useReducer vốn đã ổn định → các hàm này chỉ cần useCallback nếu
+    // consumer đưa chúng vào deps; ở đây gọi thẳng `send` là đủ đơn giản
+    next: () => send({ type: 'CONTINUE' }),
+    back: () => send({ type: 'BACK' }),
+    submit: () => send({ type: 'SUBMIT' }),
+    setAddressField: (field: keyof Address, value: string) => send({ type: 'SET_ADDRESS_FIELD', field, value }),
+    setMethod: (method: PaymentMethod) => send({ type: 'SET_METHOD', method }),
+    // Giá trị phái sinh — tính trực tiếp, không phải state (file `02`)
+    canContinue: state.status !== 'addressing' || isAddressComplete(state.address),
+  }
+}
+```
+
+### Bước 6 — Component chỉ còn là render
+
+```tsx
+// components/store/checkout-wizard.tsx (rút gọn)
+'use client'
+const TITLES: Record<WizardState['status'], string> = {
   reviewing: 'Kiểm tra đơn hàng',
   addressing: 'Giao hàng & thanh toán',
   confirming: 'Xác nhận',
   submitting: 'Đang đặt hàng…',
   failed: 'Đặt hàng không thành công',
-} as const
+}
 
-export function CheckoutWizard({
-  shopOrderIds,
-  review,
-  lines,
-}: {
-  shopOrderIds: ShopOrderItem[]
-  review: CheckoutOrder
-  lines: OrderProduct[]
-}) {
-  const [wizard, send] = useReducer(wizardReducer, undefined, initialWizardState)
-  const [actionState, formAction] = useActionState(placeOrderAction, initialActionState)
-
-  // Đồng bộ kết quả action vào machine. Action thành công thì redirect,
-  // nên chỉ đường lỗi cần xử lý ở đây.
-  useEffect(() => {
-    if (!actionState.ok && actionState.message) {
-      send({ type: 'ERROR', message: actionState.message })
-    }
-  }, [actionState])
-
-  const setField = (field: keyof Address) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    send({ type: 'SET_ADDRESS_FIELD', field, value: e.target.value })
+export function CheckoutWizard({ shopOrderIds, review, lines }: Props) {
+  const { state, formAction, next, back, submit, setAddressField, setMethod, canContinue } = useCheckoutWizard()
 
   return (
     <Card className="max-w-2xl">
-      <CardHeader><CardTitle>{TITLES[wizard.status]}</CardTitle></CardHeader>
+      <CardHeader><CardTitle>{TITLES[state.status]}</CardTitle></CardHeader>
       <CardContent className="space-y-6">
-        {wizard.status === 'reviewing' ? (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              {lines.map((l) => (
-                <div key={l.productId} className="flex items-center gap-3 text-sm">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={l.thumb} alt={l.name} className="h-12 w-12 rounded border object-cover" />
-                  <span className="flex-1">{l.name}</span>
-                  <span className="text-muted-foreground">× {l.quantity}</span>
-                  <span className="tabular-nums">{toPriceString(l.price)}</span>
-                </div>
-              ))}
-            </div>
-            <OrderTotals review={review} />
-            <Button onClick={() => send({ type: 'CONTINUE' })}>Tiếp tục</Button>
-          </div>
+        {state.status === 'reviewing' ? (
+          <>
+            <OrderLines lines={lines} review={review} />
+            <Button onClick={next}>Tiếp tục</Button>
+          </>
         ) : null}
 
-        {wizard.status === 'addressing' ? (
-          <div className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FieldRow id="street" label="Số nhà, đường" value={wizard.address.street} onChange={setField('street')} />
-              <FieldRow id="city" label="Thành phố" value={wizard.address.city} onChange={setField('city')} />
-              <FieldRow id="state" label="Tỉnh/Thành" value={wizard.address.state} onChange={setField('state')} />
-              <FieldRow id="country" label="Quốc gia" value={wizard.address.country} onChange={setField('country')} />
-            </div>
-            <div className="space-y-2">
-              <Label>Phương thức thanh toán</Label>
-              <Select
-                value={wizard.method}
-                onValueChange={(v) => send({ type: 'SET_METHOD', method: (v ?? 'COD') as PaymentMethod })}
-              >
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {PAYMENT_METHODS.map((m) => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => send({ type: 'BACK' })}>Quay lại</Button>
-              {/* disabled giờ chỉ là GỢI Ý cho người dùng — guard thật nằm trong reducer */}
-              <Button
-                onClick={() => send({ type: 'CONTINUE' })}
-                disabled={!isAddressComplete(wizard.address)}
-              >
-                Tiếp tục
-              </Button>
-            </div>
-          </div>
+        {state.status === 'addressing' ? (
+          <>
+            {(['street', 'city', 'state', 'country'] as const).map((f) => (
+              <Input key={f} aria-label={f} value={state.address[f]} onChange={(e) => setAddressField(f, e.target.value)} />
+            ))}
+            <Select value={state.method} onValueChange={(v) => setMethod((v ?? 'COD') as PaymentMethod)}>…</Select>
+            <Button variant="outline" onClick={back}>Quay lại</Button>
+            {/* disabled chỉ là GỢI Ý UX — guard thật nằm trong reducer */}
+            <Button onClick={next} disabled={!canContinue}>Tiếp tục</Button>
+          </>
         ) : null}
 
-        {wizard.status === 'confirming' || wizard.status === 'submitting' || wizard.status === 'failed' ? (
-          <form action={formAction} onSubmit={() => send({ type: 'SUBMIT' })} className="space-y-4">
+        {state.status === 'confirming' || state.status === 'submitting' || state.status === 'failed' ? (
+          // onSubmit chạy đồng bộ TRƯỚC action → UI chuyển 'submitting' ngay lập tức
+          <form action={formAction} onSubmit={submit} className="space-y-4">
             <input type="hidden" name="shop_order_ids" value={JSON.stringify(shopOrderIds)} />
-            <input type="hidden" name="street" value={wizard.address.street} />
-            <input type="hidden" name="city" value={wizard.address.city} />
-            <input type="hidden" name="state" value={wizard.address.state} />
-            <input type="hidden" name="country" value={wizard.address.country} />
-            <input type="hidden" name="paymentMethod" value={wizard.method} />
-
-            <div className="space-y-1 text-sm">
-              <p className="font-medium">Giao đến</p>
-              <p className="text-muted-foreground">
-                {wizard.address.street}, {wizard.address.city}, {wizard.address.state}, {wizard.address.country}
-              </p>
-              <p className="text-muted-foreground">Thanh toán: {wizard.method}</p>
-            </div>
-            <p className="text-lg font-semibold tabular-nums">
-              Tổng {toPriceString(review.totalCheckout)}
+            {(['street', 'city', 'state', 'country'] as const).map((f) => (
+              <input key={f} type="hidden" name={f} value={state.address[f]} />
+            ))}
+            <input type="hidden" name="paymentMethod" value={state.method} />
+            <p className="text-sm text-muted-foreground">
+              Giao đến {Object.values(state.address).join(', ')} · {state.method}
             </p>
-
-            {wizard.status === 'failed' ? (
-              <p role="alert" className="text-sm text-destructive">{wizard.error}</p>
-            ) : null}
-
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => send({ type: 'BACK' })}
-                disabled={wizard.status === 'submitting'}
-              >
-                Quay lại
-              </Button>
-              <SubmitButton>
-                {wizard.status === 'failed' ? 'Thử lại' : 'Đặt hàng'}
-              </SubmitButton>
-            </div>
+            {state.status === 'failed' ? <p role="alert" className="text-sm text-destructive">{state.error}</p> : null}
+            <Button type="button" variant="outline" onClick={back} disabled={state.status === 'submitting'}>Quay lại</Button>
+            <SubmitButton>{state.status === 'failed' ? 'Thử lại' : 'Đặt hàng'}</SubmitButton>
           </form>
         ) : null}
       </CardContent>
@@ -929,237 +648,58 @@ export function CheckoutWizard({
 }
 ```
 
-**So sánh trước / sau:**
-
 | | Trước | Sau |
 | --- | --- | --- |
-| Nguồn trạng thái | 4 `useState`/`useActionState` độc lập | 1 machine + 1 action state |
-| Trạng thái vô nghĩa | Biểu diễn được, chặn bằng `disabled` | **Không biểu diễn được** (type error) |
-| Luật nghiệp vụ nằm ở | Rải trong JSX (`disabled={!addressComplete}`) | Tập trung trong reducer |
-| Test được? | Cần jsdom + RTL + mock | **Hàm pure, 0 setup** |
-| Xử lý lỗi | Toast rồi hết — không có retry | State `failed` + nút "Thử lại", giữ dữ liệu |
-| Đọc được luồng? | Phải đọc hết component | Đọc reducer là thấy sơ đồ |
-| Thêm bước mới | Sửa 3-4 chỗ, dễ quên | Thêm 1 case, TypeScript bắt chỗ thiếu |
+| Nguồn trạng thái | 3 `useState` + `useActionState` độc lập | 1 machine + action đã bọc |
+| Trạng thái vô nghĩa | Biểu diễn được, chặn bằng `disabled` | **Không biểu diễn được** |
+| Luật nghiệp vụ | Rải trong JSX | Tập trung trong reducer |
+| Test | jsdom + RTL + mock | **Hàm pure, 0 setup** |
+| Xử lý lỗi | `toast.error` rồi mất, không có retry | State `failed`: message **ở lại** + "Thử lại", giữ dữ liệu |
+| Thêm bước mới | Sửa 3–4 chỗ | Thêm 1 case — `assertNever`/`Record` chỉ chỗ thiếu |
 
-**Điểm cộng lớn nhất là cột "Xử lý lỗi".** Bản cũ:
-
-```tsx
-useEffect(() => {
-  if (!state.ok && state.message) toast.error(state.message)
-}, [state])
-```
-
-Toast hiện rồi biến mất. Người dùng ở lại step 2, không biết phải làm gì. Bản mới có state `failed`
-tường minh với message **ở lại trên màn hình** và nút "Thử lại" — và toàn bộ địa chỉ/phương thức
-**được giữ nguyên** (vì `failed` mang theo chúng trong kiểu).
-
-### Bước 6 — Exhaustiveness checking: TypeScript bắt lỗi khi thêm state
-
-Thêm một trợ giúp nhỏ để TypeScript báo lỗi khi bạn quên xử lý một state mới:
-
-```tsx
-// lib/type-utils.ts
-/** Gọi ở nhánh default của switch để TypeScript bắt case còn thiếu. */
-export function assertNever(x: never): never {
-  throw new Error(`Unhandled case: ${JSON.stringify(x)}`)
-}
-```
-
-```tsx
-export function wizardReducer(state: WizardState, event: WizardEvent): WizardState {
-  switch (state.status) {
-    case 'reviewing':  /* ... */
-    case 'addressing': /* ... */
-    case 'confirming': /* ... */
-    case 'submitting': /* ... */
-    case 'failed':     /* ... */
-    default:
-      return assertNever(state)     // ⭐
-  }
-}
-```
-
-Giờ nếu bạn thêm `| { status: 'paying'; ... }` vào `WizardState` mà quên thêm case, `assertNever` gây
-**lỗi compile**:
-
-```
-Argument of type '{ status: "paying"; ... }' is not assignable to parameter of type 'never'
-```
-
-**Đây là lợi ích không có bằng test.** Test chỉ kiểm tra những gì bạn nghĩ ra để test. Exhaustiveness
-checking bắt **mọi** chỗ bạn quên, tự động.
-
-Áp dụng cả cho JSX bằng một map:
-
-```tsx
-const TITLES: Record<WizardState['status'], string> = {
-  reviewing: 'Kiểm tra đơn hàng',
-  addressing: 'Giao hàng & thanh toán',
-  confirming: 'Xác nhận',
-  submitting: 'Đang đặt hàng…',
-  failed: 'Đặt hàng không thành công',
-}
-```
-
-`Record<WizardState['status'], string>` yêu cầu **đủ mọi key**. Thêm state mới mà quên title → lỗi compile.
-
----
-
-## 9. Khi nào dùng FSM — và khi nào không
-
-| Dấu hiệu nên dùng FSM | Ví dụ trong repo |
-| --- | --- |
-| Nhiều biến state phải nhất quán với nhau | `checkout-wizard`: step + address + method |
-| Có bước/giai đoạn tuần tự | Wizard, onboarding, upload nhiều bước |
-| Có transition bị cấm | "không sửa địa chỉ khi đang gửi" |
-| Cần retry / rollback giữ dữ liệu | `failed → RETRY → confirming` |
-| Bạn thấy nhiều `if (a && !b && c)` | — |
-| Bug kiểu "sao nó lại ở trạng thái này" | — |
-
-| Dấu hiệu KHÔNG cần FSM | Ví dụ trong repo |
-| --- | --- |
-| 1-2 state độc lập | `create-discount-form`: `type` + `appliesTo` không liên quan nhau |
-| Chỉ bật/tắt | `seller-mobile-nav`: `open` boolean |
-| State đã được URL quản lý | `product-list`: tab + page trong searchParams |
-| Chỉ một state, không có transition phức tạp | `comment-section`: `replyOpen: string \| null` |
-
-📄 **Chú ý `comment-section.tsx`:** `replyOpen: string | null` **đã là** một FSM tối giản — hai state
-("không có form nào mở" / "form của comment X đang mở"), transition qua `toggle`. Nó không cần
-`useReducer` vì chỉ có một biến. **Nguyên tắc "make illegal states unrepresentable" quan trọng hơn
-công cụ `useReducer`.**
-
-⚖️ **Trade-off thật của FSM:**
-
-| Lợi ích | Cái giá |
-| --- | --- |
-| Trạng thái sai không biểu diễn được | Nhiều boilerplate hơn (union types, event types, reducer) |
-| Luật tập trung một chỗ, đọc được | Với 2 state đơn giản, đây là over-engineering rõ rệt |
-| Test như hàm pure, 0 setup | Cần hiểu discriminated union + type guard |
-| Exhaustiveness checking bắt lỗi khi mở rộng | Thêm một file trong `lib/` phải mở khi đọc component |
-| Retry/rollback tự nhiên | Brand type (`__complete`) hơi lạ với người mới |
-
-**Ranh giới thực dụng:** dùng FSM khi bạn có **≥3 state phụ thuộc nhau** hoặc **có transition bị cấm**.
-Với `checkout-wizard` (4 nguồn state, 3 bước, có luật) — rõ ràng đáng. Với `create-discount-form`
-(2 state độc lập) — rõ ràng không.
-
----
-
-## 10. Bọc FSM thành custom hook
-
-Kết hợp hai nửa của chương:
-
-```tsx
-// lib/hooks/use-checkout-wizard.ts
-'use client'
-import { useReducer, useEffect, useCallback } from 'react'
-import { useActionState } from 'react'
-import { placeOrderAction } from '@/actions/order.actions'
-import { initialActionState } from '@/actions/state'
-import {
-  wizardReducer,
-  initialWizardState,
-  isAddressComplete,
-  type Address,
-  type PaymentMethod,
-  type WizardState,
-} from '@/lib/checkout/wizard-machine'
-
-/**
- * Điều phối luồng checkout: machine + Server Action.
- *
- * Component chỉ cần đọc `state` và gọi các hàm điều hướng — không cần biết
- * có reducer hay useActionState bên trong.
- */
-export function useCheckoutWizard() {
-  const [state, send] = useReducer(wizardReducer, undefined, initialWizardState)
-  const [actionState, formAction] = useActionState(placeOrderAction, initialActionState)
-
-  // Action thành công thì redirect (Server Action lo), nên chỉ map đường lỗi.
-  useEffect(() => {
-    if (!actionState.ok && actionState.message) {
-      send({ type: 'ERROR', message: actionState.message })
-    }
-  }, [actionState])
-
-  // Identity ổn định — consumer có thể đưa vào dependency array an toàn.
-  const next = useCallback(() => send({ type: 'CONTINUE' }), [])
-  const back = useCallback(() => send({ type: 'BACK' }), [])
-  const submit = useCallback(() => send({ type: 'SUBMIT' }), [])
-  const setAddressField = useCallback(
-    (field: keyof Address, value: string) => send({ type: 'SET_ADDRESS_FIELD', field, value }),
-    [],
-  )
-  const setMethod = useCallback(
-    (method: PaymentMethod) => send({ type: 'SET_METHOD', method }),
-    [],
-  )
-
-  return {
-    state,
-    formAction,
-    next,
-    back,
-    submit,
-    setAddressField,
-    setMethod,
-    /** Giá trị phái sinh — tính trực tiếp, không phải state (file `02`) */
-    canContinue: state.status === 'addressing' ? isAddressComplete(state.address) : true,
-    isSubmitting: state.status === 'submitting',
-  }
-}
-```
-
-Component giờ chỉ còn là render:
-
-```tsx
-export function CheckoutWizard({ shopOrderIds, review, lines }: Props) {
-  const { state, formAction, next, back, setAddressField, setMethod, canContinue, isSubmitting } =
-    useCheckoutWizard()
-  // ...chỉ JSX
-}
-```
-
-**Ba tầng, mỗi tầng một trách nhiệm:**
+**Ba tầng, mỗi tầng một trách nhiệm** ("tách quyết định khỏi thực thi", file `14`):
 
 | Tầng | File | Trách nhiệm | Test bằng |
 | --- | --- | --- | --- |
-| **Logic** | `lib/checkout/wizard-machine.ts` | State + transition + guard | Vitest, hàm pure |
-| **Điều phối** | `lib/hooks/use-checkout-wizard.ts` | Nối machine với Server Action | RTL (nếu cần) |
-| **Trình bày** | `components/store/checkout-wizard.tsx` | JSX | Mắt / snapshot |
-
-Đây chính là nguyên tắc **"tách quyết định khỏi thực thi"** từ file `14`, áp vào state management.
+| Logic | `lib/checkout/wizard-machine.ts` | State + transition + guard | Vitest, hàm pure |
+| Điều phối | `lib/hooks/use-checkout-wizard.ts` | Nối machine với Server Action | RTL (nếu cần) |
+| Trình bày | `components/store/checkout-wizard.tsx` | JSX | Mắt / E2E |
 
 ---
 
-## 11. Best Practices
+## 7. Khi nào dùng FSM — và khi nào không
 
-1. **Đặt tên hook theo khái niệm domain**, không phải theo cơ chế. `useCheckoutWizard`, không
-   `useWizardState`.
+| Nên dùng FSM | Không cần FSM |
+| --- | --- |
+| Nhiều biến state phải nhất quán (`checkout-wizard`: step + address + method) | 1–2 state độc lập (`create-discount-form`: `type` + `appliesTo`) |
+| Có bước tuần tự (wizard, onboarding, upload nhiều bước) | Chỉ bật/tắt (`seller-mobile-nav`: `open`) |
+| Có transition bị cấm ("không sửa khi đang gửi") | State đã nằm trên URL (`product-list`: tab + page) |
+| Cần retry giữ dữ liệu | Một biến, không transition phức tạp |
+| Nhiều `if (a && !b && c)`; bug "sao nó lại ở trạng thái này" | |
 
-2. **Tuple cho 2 giá trị đối xứng, object cho 3+.** Object cho phép thêm field mà không breaking.
+📄 `comment-section.tsx`: `replyOpen: string | null` **đã là** một FSM tối giản — "không form nào mở"
+/ "form của comment X đang mở". Không cần `useReducer` vì chỉ có một biến. **Nguyên tắc "make illegal
+states unrepresentable" quan trọng hơn công cụ `useReducer`.**
 
-3. **Hàm trả về từ hook phải có identity ổn định** (`useCallback` + deps rỗng + updater form).
-   Trong hook công khai bạn không biết consumer dùng thế nào.
+⚖️ **Ranh giới thực dụng:** FSM khi có **≥3 state phụ thuộc nhau** hoặc **có transition bị cấm**. Cái giá:
+nhiều boilerplate (union, event, reducer), brand type hơi lạ với người mới, thêm một file phải mở khi
+đọc component. Với `checkout-wizard` rõ ràng đáng; với `create-discount-form` rõ ràng không.
 
-4. **Đọc callback của consumer qua `useEffectEvent`** (hoặc ref) để nó không cần identity ổn định và
-   không gây chạy lại effect.
+---
 
-5. **Không gọi hook nào bên trong → viết hàm thường ở `lib/`.** `groupComments` là mẫu đúng.
+## 8. Best Practices
 
-6. **Định nghĩa state bằng discriminated union**, mỗi nhánh chỉ mang dữ liệu có nghĩa với nó.
-
-7. **Dùng brand type + type guard** (`CompleteAddress`, `isAddressComplete`) để "đã validate" trở thành
-   một tính chất của **kiểu**, không phải một biến boolean rời rạc.
-
+1. **Đặt tên hook theo khái niệm domain.** Không gọi hook nào → không đặt tên `use…`, viết hàm thường ở `lib/`.
+2. **Tuple cho 2 giá trị đối xứng, object cho 3+.**
+3. **Hàm trả về từ hook công khai phải ổn định** (`useCallback` + updater form) — hoặc bật React Compiler.
+4. **Callback của consumer đọc trong effect → `useEffectEvent`**, không đưa vào deps, không dùng mẫu ghi ref trong render.
+5. **Dữ liệu ngoài React (browser API, store) → `useSyncExternalStore`**, `subscribe` khai báo ngoài
+   component, `getSnapshot` trả giá trị ổn định, có `getServerSnapshot` cho SSR.
+6. **React 19 tự reset form sau action** — bỏ `formRef.reset()`; muốn giữ giá trị khi lỗi thì trả về qua state.
+7. **State bằng discriminated union**; "đã validate" là tính chất của **kiểu** (brand + type guard).
 8. **Guard trong reducer, không trong JSX.** `disabled` là gợi ý UX; reducer là luật.
-
-9. **`assertNever` ở nhánh default** và `Record<Status, T>` cho map — để TypeScript bắt case thiếu khi
-   bạn mở rộng.
-
-10. **Có state `failed` tường minh với dữ liệu được giữ.** Toast rồi mất là trải nghiệm tệ; retry giữ
-    dữ liệu là trải nghiệm tốt.
-
-11. **FSM khi ≥3 state phụ thuộc nhau hoặc có transition bị cấm.** Dưới ngưỡng đó là over-engineering.
+9. **`assertNever` + `Record<Status, T>`** để TypeScript bắt case thiếu.
+10. **Đừng đồng bộ action state vào reducer bằng `useEffect`** — bọc action và `dispatch` trong đó.
 
 ---
 
@@ -1167,13 +707,13 @@ export function CheckoutWizard({ shopOrderIds, review, lines }: Props) {
 
 1. Ba việc custom hook làm được mà hàm thường không làm được?
 2. Vì sao `setOpen((o) => !o)` là điều kiện để `useCallback` giữ identity ổn định?
-3. `groupComments` nên là hàm thường hay hook? Vì sao?
-4. Kể ba trạng thái vô nghĩa mà kiểu hiện tại của `checkout-wizard` cho phép.
-5. `CompleteAddress` với `__complete: unique symbol` giải quyết vấn đề gì mà `boolean` không giải quyết được?
-6. Vì sao guard phải nằm trong reducer chứ không phải ở `disabled` của button?
-7. `assertNever` cho bạn điều gì mà test không cho được?
-8. Vì sao state `failed` mang theo `address` và `method` trong kiểu?
-9. Test FSM cần bao nhiêu setup? So sánh với test cùng logic qua component.
+3. `useEffectEvent` giải quyết vấn đề gì? Ba luật khi dùng nó?
+4. Vì sao `useState + useEffect` để đọc `navigator.onLine` kém hơn `useSyncExternalStore`? `getServerSnapshot` để làm gì?
+5. React 19 làm gì với form sau khi action chạy xong? Hệ quả xấu là gì và xử lý thế nào?
+6. Kể ba trạng thái vô nghĩa mà kiểu hiện tại của `checkout-wizard` cho phép.
+7. `CompleteAddress` với `__complete: unique symbol` giải quyết gì mà `boolean` không giải quyết được?
+8. Vì sao guard phải nằm trong reducer chứ không ở `disabled`?
+9. `assertNever` cho bạn điều gì mà test không cho được?
 10. Khi nào FSM là over-engineering? Cho ví dụ từ repo.
 
 ➡️ Tiếp theo: `19-parallel-va-intercepting-routes.md`

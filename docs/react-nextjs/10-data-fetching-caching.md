@@ -1,28 +1,38 @@
 # 10. Data Fetching & Caching
 
-> **Mục tiêu:** hiểu bốn tầng cache của Next.js, biết chính xác `cache: 'no-store'` tắt cái gì
-> (và **không** tắt cái gì), và tìm ra hai bug revalidation thật trong repo này.
+> **Mục tiêu:** phân biệt các tầng cache của Next.js 16, biết chính xác `cache: 'no-store'` tắt cái gì
+> (và **không** tắt cái gì), hiểu Server Action làm mới UI thế nào, và nắm mô hình mới
+> **Cache Components** (`'use cache'`, `cacheLife`, `cacheTag`, `updateTag`).
 
 ---
 
 ## 1. Overview
 
-### Vấn đề: "cache" trong Next.js không phải một thứ
+### Next.js 16 có HAI mô hình cache — repo đang dùng mô hình cũ
 
-Đây là chủ đề gây nhầm lẫn nhất của App Router, vì từ "cache" bị dùng cho **bốn cơ chế khác nhau**,
-ở bốn tầng khác nhau, với thời gian sống khác nhau.
+| | **Mô hình "previous"** (repo này) | **Cache Components** (mới, Next 16) |
+| --- | --- | --- |
+| Bật bằng | Mặc định | `cacheComponents: true` trong `next.config.ts` |
+| Cache dữ liệu | `fetch(..., { cache: 'force-cache', next: { tags, revalidate } })`, `unstable_cache` | `'use cache'` + `cacheLife()` + `cacheTag()` |
+| Cấu hình route | `export const dynamic / revalidate / fetchCache` | Không dùng nữa — thay bằng `'use cache'` + `cacheLife` |
+| Static + dynamic trong một route | Không — cả route static **hoặc** dynamic | **Partial Prerendering**: static shell + đảo dynamic trong `<Suspense>` |
+| Vô hiệu hoá | `revalidatePath`, `revalidateTag(tag, profile)`, `updateTag`, `refresh` | Như bên trái |
 
-Nếu bạn không phân biệt được chúng, mọi câu hỏi kiểu "vì sao dữ liệu của tôi không cập nhật?" sẽ trở
-thành đoán mò. Nên hãy bắt đầu bằng bảng này:
+📄 `next.config.ts` của repo **không** có `cacheComponents` → mọi thứ trong chương này (trừ §9) là mô hình
+"previous". Docs chính thức của 16.2 gọi nó là *Caching and Revalidating (Previous Model)*.
 
-| # | Tầng cache | Ở đâu | Sống bao lâu | Cache cái gì |
+Điểm chung của cả hai từ Next 15: **`fetch` không còn được cache mặc định.**
+
+### "Cache" không phải một thứ
+
+| # | Tầng | Ở đâu | Sống bao lâu | Cache cái gì |
 | --- | --- | --- | --- | --- |
-| 1 | **Request Memoization** | Server | **Một lần render** | Kết quả `fetch` trùng nhau trong cùng một cây component |
-| 2 | **Data Cache** | Server (persistent) | Qua nhiều request, nhiều deploy | Response của `fetch` |
-| 3 | **Full Route Cache** | Server (build/ISR) | Tới khi revalidate | HTML + RSC payload của cả route |
-| 4 | **Router Cache** | **Browser** (in-memory) | Một session, ngắn hạn | RSC payload cho client-side navigation |
+| 1 | **Request Memoization** | Server | **Một request render** | `fetch` GET trùng URL + options trong cùng cây component |
+| 2 | **Data Cache** | Server (persistent) | Qua nhiều request, nhiều deploy | Response của `fetch` có `force-cache` / `revalidate` |
+| 3 | **Full Route Cache** (prerender) | Server | Tới khi revalidate | HTML + RSC payload của route **static** |
+| 4 | **Client Cache** (trước gọi là *Router Cache*) | **Browser** (in-memory) | Tới khi reload / bị invalidate | RSC payload cho client-side navigation |
 
-Bốn tầng này **độc lập**. Tắt một cái không tắt các cái kia. Đây là điểm mấu chốt của cả chương.
+Các tầng này **độc lập**. Tắt một cái không tắt các cái kia — đó là điểm mấu chốt của cả chương.
 
 ---
 
@@ -32,73 +42,56 @@ Bốn tầng này **độc lập**. Tắt một cái không tắt các cái kia.
 
 ```
       ┌──────────────────── SERVER ────────────────────┐    ┌── BROWSER ──┐
-      │                                                 │    │              │
- API ─┼─▶ [2] Data Cache ─▶ [1] Memoization ─▶ Render ─┼───▶│ [4] Router  │
-      │    (nhiều request)   (một lần render)     │      │    │    Cache    │
-      │                                            ▼      │    │              │
+ API ─┼─▶ [2] Data Cache ─▶ [1] Memoization ─▶ Render ─┼───▶│ [4] Client  │
+      │    (nhiều request)   (một lần render)     │      │    │    Cache     │
       │                              [3] Full Route Cache │    │              │
       └─────────────────────────────────────────────────┘    └──────────────┘
 ```
 
-- **[1] Memoization** giống như "trong một cuộc họp, ai hỏi cùng câu thì tôi trả lời một lần".
-  Chỉ tồn tại trong phạm vi *một* lần render.
-- **[2] Data Cache** giống như tủ lạnh: đồ mua về dùng cho nhiều bữa.
-- **[3] Full Route Cache** giống như đồ ăn đã nấu sẵn đóng hộp: khách đến là có ngay.
-- **[4] Router Cache** giống như đồ khách tự mang về: lần sau họ không cần đến quán.
+- **[1]** "Trong một cuộc họp, ai hỏi cùng câu thì trả lời một lần."
+- **[2]** Tủ lạnh: mua một lần, dùng nhiều bữa.
+- **[3]** Đồ ăn nấu sẵn đóng hộp: khách đến là có.
+- **[4]** Đồ khách tự mang về: lần sau khỏi đến quán.
 
-### 🧠 Câu hỏi định hướng khi debug
-
-Khi dữ liệu "không cập nhật", hỏi theo thứ tự này:
+### 🧠 Thứ tự hỏi khi "dữ liệu không cập nhật"
 
 ```
-1. Dữ liệu có mới ở database chưa?           → nếu chưa, không phải lỗi cache
-2. Server có gọi API mới không?               → tầng [2] Data Cache
-3. Route có được render lại không?             → tầng [3] Full Route Cache
-4. Browser có xin dữ liệu mới không?           → tầng [4] Router Cache
+1. DB đã có dữ liệu mới chưa?          → chưa: không phải lỗi cache
+2. Server có gọi lại API không?         → [2] Data Cache
+3. Route có được render lại không?      → [3] Full Route Cache
+4. Browser có xin payload mới không?    → [4] Client Cache
 ```
 
 Đi sai thứ tự là lý do người ta rải `revalidatePath` khắp nơi mà vẫn không sửa được.
 
 ---
 
-## 3. How It Works — `apiFetch` của repo này
+## 3. `apiFetch` của repo
 
-📄 `lib/api/server-client.ts`:
+📄 `lib/api/server-client.ts` (rút gọn):
 
 ```tsx
 import 'server-only'
-import { cookies } from 'next/headers'
-import { COOKIE } from '@/lib/auth/tokens'
-import { ApiError, buildHeaders, unwrap, type SessionHeaders } from '@/lib/api/http'
+import { cookies, headers as requestHeaders } from 'next/headers'
 
-export interface FetchOptions {
-  method?: string
-  body?: unknown
-  multipart?: FormData
-  auth?: boolean
-  tags?: string[]
-  cache?: RequestCache
-  signal?: AbortSignal
-}
-
-function baseUrl(): string {
-  const url = process.env.BACKEND_URL
-  if (!url) throw new Error('BACKEND_URL is not configured')
-  return `${url}/api/v1`
+async function currentClientIp(): Promise<string | undefined> {
+  try {
+    const h = await requestHeaders()
+    return pickClientIp(h.get('x-forwarded-for'), Number(process.env.TRUST_PROXY ?? 0))
+  } catch {
+    return undefined // ngoài request (build, script)
+  }
 }
 
 export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
   let session: SessionHeaders | undefined
   if (opts.auth) {
     const store = await cookies()
-    session = {
-      clientId: store.get(COOKIE.CLIENT)?.value,
-      accessToken: store.get(COOKIE.ACCESS)?.value,
-    }
+    session = { clientId: store.get(COOKIE.CLIENT)?.value, accessToken: store.get(COOKIE.ACCESS)?.value }
   }
 
   const json = !opts.multipart && opts.body !== undefined
-  const headers = buildHeaders({ apiKey: process.env.API_KEY!, json, session })
+  const headers = buildHeaders({ apiKey: process.env.API_KEY!, json, session, clientIp: await currentClientIp() })
 
   const method = opts.method ?? (opts.body !== undefined || opts.multipart ? 'POST' : 'GET')
   const res = await fetch(`${baseUrl()}${path}`, {
@@ -113,622 +106,467 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
 }
 ```
 
-Đây là một wrapper được thiết kế tốt. Vài chi tiết đáng học:
+Ba chi tiết đáng học:
 
-**(a) Method được suy ra thông minh:**
+- **Method được suy ra:** có body → POST, không → GET. Call site gọn:
+  `apiFetch<Cart>('/cart', { auth: true })` (GET) vs `apiFetch('/cart', { auth: true, body: {...} })` (POST).
+- **`auth: true` là opt-in.** Danh mục công khai (`app/(store)/page.tsx`) không gửi token; giỏ hàng
+  (`app/(store)/cart/page.tsx`) phải *chủ ý* gửi. Sai sót theo hướng an toàn.
+- **Luôn gọi `headers()`** để chuyển IP người dùng thật qua header `x-end-user-ip`. Chi tiết này có hai
+  hệ quả về cache — xem §4 và §7.
 
-```tsx
-const method = opts.method ?? (opts.body !== undefined || opts.multipart ? 'POST' : 'GET')
-```
-
-Có body → POST. Không có → GET. Nên hầu hết call site không cần khai báo method:
-
-```tsx
-await apiFetch<Cart>('/cart', { auth: true })                        // GET
-await apiFetch('/cart', { auth: true, body: { productId, quantity } }) // POST
-await apiFetch('/cart/quantity', { method: 'PATCH', auth: true, body: {...} })  // ghi đè
-```
-
-**(b) `auth: true` là opt-in, không phải mặc định.** So sánh hai call site:
-
-```tsx
-// app/(store)/page.tsx — danh mục công khai, KHÔNG gửi token
-result = await apiFetch<ProductListResult>(`/product${query}`)
-
-// app/(store)/cart/page.tsx — dữ liệu riêng tư, CÓ gửi token
-cart = await apiFetch<Cart>('/cart', { auth: true })
-```
-
-Mặc định "không gửi credential" là lựa chọn đúng về bảo mật: bạn phải *chủ ý* gửi token, không phải
-*chủ ý* không gửi. Sai sót theo hướng an toàn.
-
-**(c) `unwrap` bóc envelope của backend:**
-
-📄 `lib/api/http.ts`:
-
-```tsx
-export async function unwrap<T>(res: Response): Promise<T> {
-  const body = await res.json().catch(() => null)
-  if (!res.ok) {
-    const message =
-      (body && typeof body === 'object' && 'message' in body && (body as { message?: string }).message) ||
-      `Request failed (${res.status})`
-    throw new ApiError(res.status, message as string)
-  }
-  if (body && typeof body === 'object' && 'data' in body) {
-    return (body as { data: T }).data
-  }
-  return body as T
-}
-```
-
-Backend trả `{ message, statusCode, data }`. `unwrap` bóc lấy `data`, hoặc throw `ApiError` mang theo
-**message thật từ backend** — nhờ đó người dùng thấy "Wrong password" thay vì "Request failed (400)".
-
-`.catch(() => null)` xử lý trường hợp response không phải JSON (ví dụ HTML error page từ reverse proxy).
-Không có nó, một lỗi 502 sẽ gây `SyntaxError` khó hiểu thay vì `ApiError`.
+📄 `lib/api/http.ts` — `unwrap` bóc envelope `{ message, statusCode, data }` của backend, hoặc throw
+`ApiError` mang **message thật** ("Wrong password" thay vì "Request failed (400)"). `res.json().catch(() => null)`
+đỡ trường hợp response là HTML (502 từ reverse proxy) — nếu không sẽ là một `SyntaxError` khó hiểu.
 
 ---
 
-## 4. ⭐ `cache: 'no-store'` — tắt cái gì, và KHÔNG tắt cái gì
+## 4. ⭐ `cache: 'no-store'` — tắt cái gì, KHÔNG tắt cái gì
 
-Đây là quyết định kiến trúc lớn nhất của repo, và cũng là chỗ dễ hiểu sai nhất.
+### TẮT: [2] Data Cache (và kéo theo [3])
 
-### `no-store` TẮT: tầng [2] Data Cache
+Mỗi lần `apiFetch` chạy = một request thật tới backend. Route chứa fetch `no-store` không thể prerender
+→ **dynamic** → [3] Full Route Cache không áp dụng.
 
-Mỗi lần `apiFetch` chạy → một request thật tới backend. Không có response nào được lưu lại giữa
-các request khác nhau.
+### KHÔNG TẮT: [4] Client Cache
 
-**Hệ quả phụ quan trọng:** vì mọi fetch là `no-store`, route chứa nó trở thành **dynamic** —
-Next.js không thể prerender nó tại build time, và tầng [3] Full Route Cache cũng không áp dụng.
+Client Cache nằm ở browser. Từ Next 15, **page** không còn được cache khi điều hướng bằng `<Link>`
+(`staleTimes.dynamic` mặc định = 0), nhưng:
 
-### `no-store` KHÔNG TẮT: tầng [4] Router Cache
+- **layout** và `loading` state vẫn được tái sử dụng khi điều hướng client-side;
+- **Back/Forward** dùng lại payload đã có, không hỏi server.
 
-Và đây là điểm mà nhiều người bỏ qua.
+```
+/orders  ──Link──▶  /orders/abc  ──(hủy đơn bằng cách khác)──▶  Back
+                                                              └─ /orders hiện lại bản CŨ trong bộ nhớ
+```
 
-**Router Cache nằm ở browser.** Khi bạn điều hướng bằng `<Link>` từ `/orders` sang `/orders/abc`
-rồi bấm Back, browser **không** xin lại dữ liệu — nó dùng RSC payload đã cache trong bộ nhớ.
+### Vì sao repo `no-store` 100% vẫn cần `revalidatePath`?
 
-Điều đó có nghĩa: `no-store` **không** đủ để bảo đảm người dùng thấy dữ liệu mới sau một mutation.
-Bạn vẫn cần `revalidatePath`.
+Vì cách **Server Action** trả UI về. Đọc trực tiếp từ source 16.2.10
+(`server/app-render/action-handler.js`, `client/.../server-action-reducer.js`):
 
-> **Đây là câu trả lời cho câu hỏi "nếu mọi thứ là `no-store`, tại sao vẫn cần `revalidatePath`?"**
->
-> `revalidatePath` làm ba việc:
-> 1. Xoá Data Cache cho path đó (ở đây không có gì để xoá — đã `no-store`)
-> 2. Xoá Full Route Cache cho path đó (ở đây cũng không có)
-> 3. **Đánh dấu path đó là "stale" trong Router Cache của client** ← đây mới là việc thực sự có tác dụng
+| Trong action bạn gọi | Response của action | Client |
+| --- | --- | --- |
+| Không gọi gì | **Chỉ** giá trị trả về, không có UI mới (`skipPageRendering`) | Giữ nguyên UI cũ → toast "Đã hủy" nhưng badge vẫn "pending" |
+| `revalidatePath(...)` / `updateTag(...)` / `cookies().set(...)` | Server **render lại trang hiện tại từ root** và gửi kèm | Áp UI mới + xoá Client Cache |
+| `refresh()` | Render lại phần dynamic của trang hiện tại | Áp UI mới, không đụng cache dữ liệu |
+| `revalidateTag(tag, 'max')` | **Không** render lại ("server actions don't pull their own writes") | Trang hiện tại vẫn cũ tới lần truy cập sau |
 
-### ⚖️ Đánh giá quyết định `no-store` mặc định
+Nghĩa là trong repo này, `revalidatePath` **không** xoá được gì ở [2]/[3] (vì đã `no-store`) — việc
+có tác dụng của nó là *bắt action gửi UI mới về và xoá Client Cache*.
+
+⚠️ Với dữ liệu không cache, công cụ đúng ngữ nghĩa trong Next 16 là `refresh()`:
+
+```tsx
+'use server'
+import { refresh } from 'next/cache'
+
+export async function removeFromCartAction(_prev: ActionState, formData: FormData) {
+  await apiFetch('/cart', { method: 'DELETE', auth: true, body: { /* ... */ } })
+  refresh()   // "render lại trang tôi đang đứng" — header badge, cart list đều mới
+  return { ok: true, message: 'Item removed' }
+}
+```
+
+### ⚖️ Đánh giá `no-store` mặc định
 
 | Lợi ích | Cái giá |
 | --- | --- |
-| **Luôn đúng dữ liệu.** Không bao giờ có chuyện người dùng A thấy giỏ hàng của người dùng B | Mỗi page view = một round-trip tới backend |
-| Không cần suy nghĩ về invalidation cho từng endpoint | Không tận dụng được CDN cho nội dung công khai |
-| Đơn giản — một quy tắc cho tất cả | TTFB phụ thuộc hoàn toàn vào tốc độ backend |
+| Luôn đúng; không thể rò dữ liệu user A sang user B qua cache | Mỗi page view = round-trip backend |
+| Không phải nghĩ invalidation cho từng endpoint | Không tận dụng CDN cho nội dung công khai |
+| Một quy tắc cho tất cả | TTFB phụ thuộc hoàn toàn tốc độ backend |
 
-**Với dữ liệu có xác thực, đây là lựa chọn đúng.** Cart, orders, seller products — cache những thứ này
-là mời gọi lỗ hổng nghiêm trọng (người dùng thấy dữ liệu của người khác).
+Với cart, orders, seller products — đúng. Nhưng nó bỏ lỡ **danh mục sản phẩm công khai**: không dùng
+token, giống nhau với mọi người, đọc nhiều nhất.
 
-**Nhưng nó bỏ mất một cơ hội lớn:** danh mục sản phẩm công khai.
+### Cách khai thác: `force-cache` + tags — và một cái bẫy
 
-📄 `app/(store)/page.tsx`:
+`FetchOptions` đã có `tags` và đã truyền vào `next.tags`, nhưng **chưa call site nào dùng**.
 
-```tsx
-result = await apiFetch<ProductListResult>(`/product${query}`)   // no-store, không auth
-```
-
-📄 `app/(store)/products/[id]/page.tsx`:
+⚠️ **Bẫy:** cache key của Data Cache gồm URL + method + **headers** + body. `apiFetch` luôn gửi
+`x-end-user-ip` → bật `force-cache` thẳng trên `apiFetch` sẽ tạo **một entry cho mỗi IP** — gần như
+không có cache hit. Cần một fetcher công khai riêng, không header theo user:
 
 ```tsx
-product = await apiFetch<Product>(`/product/${id}`)              // no-store, không auth
-comments = await apiFetch<Comment[]>(`/comment?productId=${id}`)  // no-store, không auth
+// lib/api/public-client.ts
+import 'server-only'
+import { unwrap } from '@/lib/api/http'
+
+export async function publicFetch<T>(path: string, tags: string[]): Promise<T> {
+  const res = await fetch(`${process.env.BACKEND_URL}/api/v1${path}`, {
+    headers: { 'x-api-key': process.env.API_KEY! },   // giống nhau cho mọi người
+    cache: 'force-cache',
+    next: { tags },
+  })
+  return unwrap<T>(res)
+}
 ```
-
-**Ba request này không dùng token.** Response giống nhau cho mọi người dùng. Chúng **có thể** được
-cache — và với một e-commerce, đây là dữ liệu được đọc nhiều nhất.
-
-### Cách khai thác: thêm tags
-
-`FetchOptions` **đã có** field `tags`, và nó **đã được** truyền vào `fetch`:
-
-```tsx
-next: opts.tags ? { tags: opts.tags } : undefined,
-```
-
-Nhưng **không một call site nào trong repo dùng nó**. Đây là một capability đã build xong nhưng chưa
-được dùng.
-
-**Bước 1 — bật cache cho dữ liệu công khai:**
 
 ```tsx
 // app/(store)/products/[id]/page.tsx
-product = await apiFetch<Product>(`/product/${id}`, {
-  cache: 'force-cache',
-  tags: ['products', `product:${id}`],
-})
+const raw = await publicFetch<unknown>(`/product/${id}`, ['products', `product:${id}`])
+const comments = await publicFetch<Comment[]>(`/comment?productId=${id}`, [`comments:${id}`])
 ```
 
-```tsx
-// app/(store)/page.tsx
-result = await apiFetch<ProductListResult>(`/product${query}`, {
-  cache: 'force-cache',
-  tags: ['products'],
-})
-```
-
-**Bước 2 — invalidate khi seller đổi sản phẩm.** Sửa `actions/product.actions.ts`:
+Invalidate khi seller đổi sản phẩm — 📄 `actions/product.actions.ts`, `publishProductAction`:
 
 ```tsx
 import { revalidatePath, revalidateTag } from 'next/cache'
 
-export async function publishProductAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  const id = String(formData.get('id') ?? '')
-  if (!id) return { ok: false, message: 'Missing product id' }
-  try {
-    await apiFetch(`/product/published/${id}`, { method: 'PATCH', auth: true, body: {} })
-  } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not publish the product') }
-  }
-  revalidatePath('/seller/products')     // dashboard của seller
-  revalidateTag('products')              // ← MỚI: danh mục công khai
-  revalidateTag(`product:${id}`)         // ← MỚI: trang chi tiết
-  return { ok: true, message: 'Product published' }
-}
+// ... sau khi PATCH /product/published/:id thành công
+revalidatePath('/seller/products')        // dashboard seller (đang đứng ở đây)
+revalidateTag('products', 'max')          // danh mục công khai: stale-while-revalidate
+revalidateTag(`product:${id}`, 'max')
 ```
 
-**Bước 3 — comment cũng nên có tag riêng**, vì nó đổi thường xuyên hơn thông tin sản phẩm:
-
-```tsx
-comments = await apiFetch<Comment[]>(`/comment?productId=${id}`, {
-  cache: 'force-cache',
-  tags: [`comments:${id}`],
-})
-```
+Comment là trường hợp **read-your-own-writes**: người vừa comment phải thấy comment của mình ngay →
+`updateTag`, không phải `revalidateTag(..., 'max')`:
 
 ```tsx
 // actions/comment.actions.ts
-revalidatePath(`/products/${productId}`)
-revalidateTag(`comments:${productId}`)     // ← MỚI
+import { updateTag } from 'next/cache'
+updateTag(`comments:${productId}`)        // hết hạn ngay + render lại trang hiện tại
 ```
 
-**Kết quả:** trang sản phẩm được phục vụ từ cache (nhanh, không tải backend), nhưng cập nhật **ngay**
-khi seller sửa hoặc khách comment.
+### `revalidateTag` (Next 16) — chữ ký mới
 
-### `revalidatePath` vs `revalidateTag` — chọn cái nào
+```tsx
+revalidateTag('products')          // ❌ deprecated (lỗi TypeScript): hết hạn ngay, request sau bị block
+revalidateTag('products', 'max')   // ✅ đánh dấu stale; request sau nhận bản cũ, fetch mới ở background
+updateTag('products')              // ✅ chỉ trong Server Action: hết hạn ngay, user thấy ngay thay đổi của mình
+```
 
-| | `revalidatePath('/orders')` | `revalidateTag('products')` |
-| --- | --- | --- |
-| Phạm vi | Một URL cụ thể | Mọi fetch có tag đó, ở **bất kỳ** route nào |
-| Bạn cần biết trước | Danh sách URL bị ảnh hưởng | Không — tag tự tìm |
-| Phù hợp khi | Dữ liệu chỉ hiện ở một trang | Dữ liệu hiện ở nhiều trang |
-| Rủi ro | **Dễ quên một URL** | Tag đặt quá rộng → invalidate quá nhiều |
+| | `revalidatePath('/orders')` | `revalidateTag('products', 'max')` | `updateTag('comments:1')` |
+| --- | --- | --- | --- |
+| Phạm vi | Một path (hoặc pattern + `'page'`/`'layout'`) | Mọi dữ liệu mang tag, ở **bất kỳ** route nào | Như tag |
+| Gọi ở | Server Action, Route Handler | Server Action, Route Handler (webhook) | **Chỉ** Server Action |
+| Ngữ nghĩa | Hết hạn | Stale-while-revalidate | Read-your-own-writes |
+| Rủi ro | Quên một URL | Tag quá rộng | — |
 
-Ví dụ minh hoạ sự khác biệt: một sản phẩm xuất hiện ở `/`, `/products/:id`, `/seller/products`, và
-`/cart`. Với `revalidatePath`, bạn phải nhớ cả bốn. Với `revalidateTag('products')`, một dòng là đủ.
+Một sản phẩm xuất hiện ở `/`, `/products/:id`, `/seller/products`, `/cart`: `revalidatePath` bắt bạn
+nhớ cả bốn; một tag là đủ.
 
 ---
 
-## 5. ⚠️ Hai bug revalidation thật trong repo
+## 5. ⚠️ Hai chỗ revalidate "lệch path" trong repo
 
-### Bug 1: Cancel order từ trang chi tiết không cập nhật trang đó
+### `cancelOrderAction` chỉ revalidate danh sách
 
 📄 `actions/order.actions.ts`:
 
 ```tsx
 export async function cancelOrderAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  const orderId = String(formData.get('orderId') ?? '')
-  if (!orderId) return { ok: false, message: 'Missing order id' }
-  try {
-    await apiFetch(`/order/${orderId}/cancel`, { method: 'PATCH', auth: true, body: {} })
-  } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not cancel the order') }
-  }
+  // ... PATCH /order/:id/cancel
   revalidatePath('/orders')                 // ← chỉ danh sách
   return { ok: true, message: 'Order cancelled' }
 }
 ```
 
-Nhưng `CancelOrderButton` được dùng ở **hai** chỗ:
+Nhưng `CancelOrderButton` dùng ở **hai** nơi: `components/store/order-card.tsx` (`/orders`) và
+`app/(store)/orders/[id]/page.tsx` (`/orders/:id`).
 
-📄 `components/store/order-card.tsx` (trang `/orders`):
+### `cartActions` chỉ revalidate `/cart`
 
-```tsx
-{order.order_status === 'pending' ? <CancelOrderButton orderId={order._id} /> : null}
-```
+📄 `actions/cart.actions.ts` — `addToCartAction` gọi `revalidatePath('/cart')`, nhưng badge giỏ hàng nằm
+trong `StoreHeader` của `app/(store)/layout.tsx`, và người dùng đang đứng ở `/products/:id`.
 
-📄 `app/(store)/orders/[id]/page.tsx` (trang `/orders/:id`):
+### Thực tế ở 16.2: chưa thành bug — nhưng đang dựa vào hành vi tạm thời
 
-```tsx
-{order.order_status === 'pending' ? <CancelOrderButton orderId={order._id} /> : null}
-```
+Như bảng ở §4: **bất kỳ** lời gọi `revalidatePath` nào trong action đều khiến server render lại trang
+hiện tại *từ root* — source có ghi `// TODO: only revalidate if the path matches`. Docs chính thức của
+`revalidatePath` cũng viết: *"Currently, it also causes all previously visited pages to refresh… This
+behavior is temporary."* Nên hôm nay badge và trạng thái đơn **vẫn** cập nhật; khi Next sửa TODO đó,
+hai chỗ này sẽ thành bug thật (toast "Order cancelled" nhưng nút Cancel vẫn còn).
 
-**Kịch bản bug:**
-
-```
-1. Người dùng ở /orders/abc123, đơn hàng đang "pending"
-2. Bấm "Cancel order"
-3. Backend hủy đơn thành công ✅
-4. revalidatePath('/orders') — nhưng người dùng đang ở /orders/abc123, KHÔNG phải /orders
-5. Toast "Order cancelled" hiện ra ✅
-6. NHƯNG: Badge vẫn hiện "pending". Timeline vẫn hiện "pending".
-   Nút "Cancel order" VẪN CÒN.
-7. Người dùng bấm lại → backend trả lỗi "Order already cancelled"
-   → toast lỗi, người dùng bối rối: "vừa hủy được mà?"
-```
-
-**Cách sửa:**
+Cách sửa không phụ thuộc chi tiết cài đặt:
 
 ```tsx
-export async function cancelOrderAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  const orderId = String(formData.get('orderId') ?? '')
-  if (!orderId) return { ok: false, message: 'Missing order id' }
-  try {
-    await apiFetch(`/order/${orderId}/cancel`, { method: 'PATCH', auth: true, body: {} })
-  } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not cancel the order') }
-  }
-  revalidatePath('/orders')
-  revalidatePath(`/orders/${orderId}`)      // ← SỬA: cả trang chi tiết
-  return { ok: true, message: 'Order cancelled' }
-}
+// ❌ ngầm dựa vào "revalidate gì cũng render lại trang hiện tại"
+revalidatePath('/orders')
+
+// ✅ nói đúng ý: list + chi tiết
+revalidatePath('/orders')
+revalidatePath(`/orders/${orderId}`)
+
+// ✅ hoặc, vì dữ liệu no-store: "làm mới trang tôi đang đứng"
+refresh()
 ```
 
-**Bài học tổng quát:** khi một component được dùng ở nhiều route, action của nó phải revalidate
-**mọi** route đó. Đây chính là loại lỗi mà `revalidateTag` tránh được:
-
-```tsx
-// Cách bền hơn: gắn tag khi fetch
-const result = await apiFetch<OrdersResult>('/order', { auth: true, tags: ['orders'] })
-const order = await apiFetch<Order>(`/order/${id}`, { auth: true, tags: ['orders', `order:${id}`] })
-
-// Rồi trong action chỉ cần:
-revalidateTag('orders')     // hit cả hai trang, không cần biết URL nào
-```
-
-### Bug 2: Badge giỏ hàng không cập nhật (đã nói ở file `09`)
-
-📄 `actions/cart.actions.ts`:
-
-```tsx
-revalidatePath('/cart')
-```
-
-Nhưng `StoreHeader` — nơi hiển thị badge — nằm trong `app/(store)/layout.tsx`, không phải trong
-`/cart`. Sau khi "Add to cart" từ trang sản phẩm, badge không đổi.
-
-**Cách sửa:**
-
-```tsx
-// (a) Đơn giản nhất — revalidate cả layout
-revalidatePath('/', 'layout')
-
-// (b) Chính xác hơn — dùng tag
-// trong store-header.tsx và cart/page.tsx:
-const cart = await apiFetch<Cart>('/cart', { auth: true, tags: ['cart'] })
-// trong action:
-revalidateTag('cart')
-```
-
-Tham số thứ hai của `revalidatePath` (`'page'` | `'layout'`) quyết định phạm vi:
+Cho badge trong layout: `revalidatePath('/', 'layout')` (búa lớn — invalidate toàn app) hoặc `refresh()`.
 
 | Lời gọi | Invalidate |
 | --- | --- |
-| `revalidatePath('/cart')` | Chỉ `page.tsx` của `/cart` |
-| `revalidatePath('/cart', 'layout')` | Layout của `/cart` và **mọi route bên dưới** |
-| `revalidatePath('/', 'layout')` | Layout root và **toàn bộ app** |
+| `revalidatePath('/cart')` | Trang `/cart` |
+| `revalidatePath('/cart', 'layout')` | Layout `/cart` và mọi route bên dưới |
+| `revalidatePath('/products/[id]', 'page')` | Mọi trang khớp pattern (bắt buộc có `type` khi dùng pattern) |
+| `revalidatePath('/', 'layout')` | Toàn bộ app |
 
-Cẩn thận với `revalidatePath('/', 'layout')` — nó là quả búa lớn, invalidate mọi thứ.
+**Bài học tổng quát:** component dùng ở nhiều route → action của nó phải làm mới **mọi** route đó, hoặc
+dùng tag để không cần biết URL.
 
 ---
 
-## 6. Request Memoization — tầng thường bị bỏ qua
+## 6. Request Memoization và `cache()` của React
 
-### Vấn đề: cùng dữ liệu, fetch nhiều lần trong một render
-
-📄 Trên trang `/cart`, hai component đều fetch `/cart`:
+📄 Trên `/cart`, hai component cùng fetch `/cart` trong **một** request:
 
 ```tsx
-// app/(store)/layout.tsx → components/store/store-header.tsx
+// components/store/store-header.tsx (trong app/(store)/layout.tsx)
 const cart = await apiFetch<Cart>('/cart', { auth: true })
-cartCount = cart.cart_count_product ?? 0
-```
 
-```tsx
 // app/(store)/cart/page.tsx
 cart = await apiFetch<Cart>('/cart', { auth: true })
 ```
 
-Layout và page render trong **cùng một request**, cùng một cây component. Đây chính là tình huống mà
-tầng **[1] Request Memoization** được thiết kế cho.
+Next.js memoize `fetch` **GET** có cùng URL + options trong cùng cây render (layout, page,
+`generateMetadata`; **không** áp dụng trong Route Handler). Field `cache` không nằm trong key — `no-store`
+vẫn được dedupe trong một request. Ngoại lệ: truyền `signal` (hoặc method khác GET/HEAD) thì **không** dedupe.
 
-Cơ chế: Next.js mở rộng `fetch` để nhớ các request GET có cùng URL và cùng options trong phạm vi một
-lần render cây component. Lần gọi thứ hai nhận lại kết quả của lần đầu.
+⚠️ Xác minh thay vì tin: thêm tạm `console.log(\`[apiFetch] ${method} ${path}\`)` vào `apiFetch`, chạy
+`pnpm build && pnpm start`, mở `/cart`, đếm dòng log.
 
-⚠️ **Nhưng đừng tin — hãy xác minh.** Memoization có nhiều điều kiện (method, options, có cùng render
-pass không), và hành vi có thể khác giữa các phiên bản. Cách kiểm tra rẻ nhất:
+### Hàm không phải `fetch` → tự bọc `cache()`
 
-```tsx
-// Tạm thêm vào lib/api/server-client.ts để đo
-export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
-  console.log(`[apiFetch] ${opts.method ?? 'GET'} ${path}`)
-  // ...
-}
-```
-
-Chạy `pnpm build && pnpm start`, mở `/cart`, đếm số dòng log cho `/cart` trong terminal server.
-Nếu thấy hai dòng → không được dedupe.
-
-### Đảm bảo dedupe rõ ràng bằng `cache()` của React
-
-Với các hàm **không phải `fetch`** — như `getAccessPayload()` — memoization của Next.js không áp dụng.
-Bạn phải tự bọc bằng `cache()`:
-
-📄 `lib/auth/session.ts` hiện tại:
-
-```tsx
-export async function getAccessPayload(): Promise<JwtPayload | null> {
-  const store = await cookies()
-  const token = store.get(COOKIE.ACCESS)?.value
-  return token ? decodeJwt(token) : null
-}
-```
-
-Hàm này được gọi ở nhiều nơi trong **cùng một request**:
-
-| File | Gọi để làm gì |
-| --- | --- |
-| `components/store/store-header.tsx` | Lấy email, kiểm tra `isShop`, quyết định fetch cart |
-| `app/(seller)/seller/page.tsx` | Hiển thị email |
-| `app/(seller)/seller/account/page.tsx` | Kiểm tra `isShop` |
-| `app/(seller)/seller/discounts/page.tsx` | Lấy `userId` để build path |
-
-Trên trang `/seller/account`, nó chạy **hai lần** (layout root không gọi, nhưng account page gọi, và
-nếu sau này header cũng dùng thì thành hai). Mỗi lần đều decode base64 + `JSON.parse`.
-
-**Với `cache()`:**
+📄 `lib/auth/session.ts` — `getAccessPayload()` (đọc cookie + decode JWT) được gọi ở `store-header.tsx`,
+`app/(seller)/seller/page.tsx`, `seller/account/page.tsx`, `seller/discounts/page.tsx`. Memoization của
+Next không áp dụng cho nó.
 
 ```tsx
 import 'server-only'
 import { cache } from 'react'
-import { cookies } from 'next/headers'
-import { COOKIE, decodeJwt } from '@/lib/auth/tokens'
-import type { JwtPayload, Tokens } from '@/types/api'
 
-/**
- * Được cache trong phạm vi MỘT request: mọi component đọc payload đều chia sẻ
- * cùng một lần decode. `cache()` của React dedupe theo tham số — ở đây không có
- * tham số nên mỗi request chỉ decode một lần.
- */
+// Dedupe trong phạm vi MỘT request (key = tham số; ở đây không có tham số)
 export const getAccessPayload = cache(async (): Promise<JwtPayload | null> => {
   const store = await cookies()
   const token = store.get(COOKIE.ACCESS)?.value
   return token ? decodeJwt(token) : null
 })
-
-export const isShop = cache(async (): Promise<boolean> => {
-  const payload = await getAccessPayload()
-  return Boolean(payload?.roles?.includes('shop'))
-})
 ```
 
-**Lợi ích thật ở đây không phải hiệu năng** (decode JWT rất nhanh) mà là **tính nhất quán**: mọi
-component trong một request thấy **cùng một** payload. Nếu không có `cache()` và proxy vừa refresh
-token giữa hai lời gọi, hai component có thể thấy hai payload khác nhau — một bug cực khó tái hiện.
+Lợi ích chính là **tính nhất quán**, không phải tốc độ: mọi component trong một request thấy cùng một
+payload, kể cả khi proxy vừa refresh token giữa hai lần gọi.
 
-> **`cache()` là công cụ tổng quát hơn:** dùng nó cho *mọi* hàm truy cập dữ liệu không dùng `fetch`
-> (đọc cookie, query database qua ORM, gọi thư viện SDK).
+| | Memoization của Next | `cache()` của React | Data Cache / `'use cache'` |
+| --- | --- | --- | --- |
+| Áp cho | `fetch` GET | Bất kỳ hàm async nào | `fetch` / hàm được đánh dấu |
+| Sống | Một request | Một request | Qua nhiều request |
+| An toàn với dữ liệu per-user | Có | Có | Chỉ khi key chứa user |
 
 ---
 
-## 7. Static vs Dynamic Rendering
-
-### Cái gì làm một route trở thành dynamic
+## 7. Static vs Dynamic Rendering (mô hình previous)
 
 | Thứ bạn dùng | Kết quả |
 | --- | --- |
-| `cookies()` | Route → dynamic |
-| `headers()` | Route → dynamic |
-| `searchParams` (dùng thật, không chỉ khai báo) | Route → dynamic |
-| `fetch(..., { cache: 'no-store' })` | Fetch đó không cache; route → dynamic |
+| `cookies()`, `headers()`, `draftMode()` | Route → dynamic |
+| `searchParams` (đọc giá trị) | Route → dynamic |
+| `fetch(..., { cache: 'no-store' })` | Route → dynamic |
+| `connection()` (thay cho `unstable_noStore`) | Route → dynamic |
 | `export const dynamic = 'force-dynamic'` | Route → dynamic (tường minh) |
-| `connection()` | Route → dynamic |
 
-### Repo này: 100% dynamic — và một quan sát thú vị
+```tsx
+import { connection } from 'next/server'
 
-Mọi trang trong repo đều dynamic, vì:
+export default async function FlashSalePage() {
+  await connection()                     // "đoạn dưới phải chạy lúc có request"
+  const endsAt = Date.now() + 15 * 60_000
+  return <Countdown endsAt={endsAt} />
+}
+```
 
-1. `apiFetch` mặc định `cache: 'no-store'`
-2. `apiFetch({ auth: true })` gọi `cookies()`
-3. Hầu hết trang gọi `getAccessPayload()` → `cookies()`
+### Repo này: 100% dynamic
 
-**Điểm thú vị:** ngay cả trang danh mục công khai `app/(store)/page.tsx` — không dùng `auth`, không
-đọc cookie trực tiếp — **vẫn** là dynamic. Vì sao?
-
-Vì nó nằm trong `app/(store)/layout.tsx`, và layout đó render `<StoreHeader />`, và `StoreHeader`
-gọi `getAccessPayload()` → `cookies()`.
+1. `apiFetch` mặc định `no-store`.
+2. `apiFetch` **luôn** gọi `headers()` (lấy client IP) — nên ngay cả fetch công khai cũng làm route dynamic.
+3. `app/(store)/layout.tsx` render `StoreHeader` → `getAccessPayload()` → `cookies()`.
 
 ```
 app/(store)/layout.tsx
- └── StoreHeader ──▶ getAccessPayload() ──▶ cookies()  ← LÀM CẢ NHÁNH THÀNH DYNAMIC
+ └── StoreHeader ──▶ cookies()            ← cả nhánh (store) dynamic
  └── {children}
-      └── app/(store)/page.tsx  ← bị "lây" dynamic
+      └── app/(store)/page.tsx ──▶ apiFetch ──▶ headers() + no-store   ← tự nó cũng dynamic
 ```
 
-> **Nguyên tắc:** dynamic **lan lên trên**. Một `cookies()` ở bất kỳ đâu trong cây làm cả route đó
-> dynamic. Đây là lý do việc *đặt* dynamic API ở đâu quan trọng, không chỉ việc *có dùng* nó.
+Với mô hình previous, **một** request-time API ở bất kỳ đâu trong cây → **cả route** dynamic. Muốn trang
+danh mục prerender được, phải gỡ **cả ba** nguyên nhân — và kể cả vậy, layout per-user vẫn kéo cả route
+về dynamic. Tách "vỏ tĩnh + đảo động" trong cùng một route chỉ làm được với **Cache Components** (§9).
 
-**Điều đó có sai không?** Với repo này thì **không** — header phải hiển thị trạng thái đăng nhập và
-số lượng giỏ hàng, hai thứ vốn dĩ per-user. Đây là dynamic hợp lý.
+---
 
-Nhưng nếu bạn muốn danh mục được phục vụ từ CDN, đây là chỗ cần tách:
+## 8. Sửa waterfall
+
+📄 `app/(store)/products/[id]/page.tsx` — hiện tại tuần tự:
 
 ```tsx
-// app/(store)/layout.tsx
+detail = normalizeProductDetail(await apiFetch<unknown>(`/product/${id}`))   // ~150ms
+// ... (early return nếu lỗi)
+comments = await apiFetch<Comment[]>(`/comment?productId=${id}`)             // ~150ms, chờ cái trên
+const currentUserId = await getClientId()
+// Tổng ≈ 300ms trước khi gửi byte nào
+```
+
+```tsx
+// ✅ Song song: hai request không phụ thuộc nhau → khởi động cùng lúc
+const [detailRes, commentsRes] = await Promise.allSettled([
+  apiFetch<unknown>(`/product/${id}`),
+  apiFetch<Comment[]>(`/comment?productId=${id}`),
+])
+if (detailRes.status === 'rejected') return <ProductError error={detailRes.reason} />
+const detail = normalizeProductDetail(detailRes.value)
+const comments = commentsRes.status === 'fulfilled' ? commentsRes.value : []   // comments lỗi ≠ trang lỗi
+```
+
+| Cấu hình | Thấy sản phẩm | Tải backend |
+| --- | --- | --- |
+| Hiện tại (tuần tự) | ~300ms | 2 request / view |
+| `Promise.allSettled` song song | ~150ms | 2 request / view |
+| Song song + comments trong `<Suspense>` (file `06`) | ~150ms, comments stream sau | 2 request / view |
+| + `publicFetch` có tag (§4) | ~vài ms khi cache hit | ~0 giữa hai lần invalidate |
+
+---
+
+## 9. Mô hình mới: Cache Components (`cacheComponents: true`)
+
+Thay vì *suy ra* "route này dynamic vì ai đó gọi `cookies()`", bạn **đánh dấu tường minh** cái gì được
+cache. Mặc định: **không gì được cache**, mọi thứ chạy lúc request — trừ khi có `'use cache'`.
+
+```ts
+// next.config.ts
+const nextConfig: NextConfig = { cacheComponents: true }
+```
+
+Bật flag này cũng là cách duy nhất để có **Partial Prerendering** ở Next 16 (`experimental.ppr` và
+`experimental_ppr` đã bị bỏ; `experimental.dynamicIO`/`useCache` cũng được thay bằng flag này).
+
+### `'use cache'` + `cacheLife` + `cacheTag`
+
+```tsx
+// lib/catalog.ts
+import { cacheLife, cacheTag } from 'next/cache'
+
+export async function getProduct(id: string) {
+  'use cache'
+  cacheLife('hours')                  // profile: seconds | minutes | hours | days | weeks | max
+  cacheTag('products', `product:${id}`)
+  // tham số `id` tự thành một phần cache key; header không theo user
+  const res = await fetch(`${process.env.BACKEND_URL}/api/v1/product/${id}`, {
+    headers: { 'x-api-key': process.env.API_KEY! },
+  })
+  return unwrap<unknown>(res)
+}
+```
+
+`'use cache'` dùng được ở hai mức: **data** (hàm như trên) và **UI** (đặt đầu một component/page/layout).
+`cacheLife`/`cacheTag` đã stable ở 16 (không còn `unstable_`). `unstable_cache` được thay bằng
+`'use cache'`.
+
+### Quy tắc bắt buộc
+
+```tsx
+// ❌ Không gọi request-time API bên trong scope cache — lỗi ngay
+async function getCart() {
+  'use cache'
+  const store = await cookies()
+  // ...
+}
+
+// ✅ Đọc ở ngoài, truyền giá trị vào làm tham số (thành cache key)
+async function CartBadge() {
+  const userId = (await cookies()).get(COOKIE.CLIENT)?.value
+  return <CachedBadge userId={userId} />
+}
+async function CachedBadge({ userId }: { userId?: string }) {
+  'use cache'
+  // ...
+}
+```
+
+⚠️ Vì vậy `apiFetch` hiện tại (gọi `headers()`, `cookies()`) **không** dùng được trong `'use cache'` —
+cần fetcher công khai như `publicFetch` ở §4. (Ngoại lệ: `'use cache: private'` cho phép đọc
+`cookies()`/`headers()` nhưng chỉ cache trong bộ nhớ browser, không lưu ở server — vẫn **experimental** ở 16.2.)
+
+Dữ liệu không cache + request-time API phải nằm trong `<Suspense>`, nếu không build báo lỗi
+"Uncached data was accessed outside of `<Suspense>`". Đổi lại, phần còn lại được prerender thành **static
+shell**:
+
+```tsx
+// app/(store)/layout.tsx — dưới Cache Components
 export default function StoreLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-full">
-      {/* Phần tĩnh của header render ngay; phần per-user stream sau */}
-      <StoreHeaderShell>
+    <>
+      <header>
+        <Logo />                                       {/* static shell */}
         <Suspense fallback={<HeaderUserSkeleton />}>
-          <StoreHeaderUser />     {/* ← chỉ component NÀY gọi cookies() */}
+          <HeaderUser />                               {/* cookies() + cart: stream lúc request */}
         </Suspense>
-      </StoreHeaderShell>
-      <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
-      <footer className="border-t">
-        <div className="mx-auto max-w-6xl px-4 py-6 text-sm text-muted-foreground">© Shop</div>
-      </footer>
-    </div>
+      </header>
+      <main>{children}</main>
+    </>
   )
 }
 ```
 
-Đây chính là mô hình **Partial Prerendering**: vỏ tĩnh + đảo động, ranh giới là Suspense boundary.
-Cùng một cơ chế đã giải thích ở file `06` với `useSearchParams`.
+### Đối chiếu
 
----
-
-## 8. Sửa waterfall — đo lường cụ thể
-
-Nhắc lại từ file `06`, giờ với con số:
-
-📄 `app/(store)/products/[id]/page.tsx` — hiện tại:
-
-```tsx
-product = await apiFetch<Product>(`/product/${id}`)             // 150ms
-comments = await apiFetch<Comment[]>(`/comment?productId=${id}`) // 150ms
-const currentUserId = await getClientId()                        // ~0ms (đọc cookie)
-// Tổng: ~300ms
-```
-
-Ba mức cải thiện:
-
-```tsx
-// Mức 1: song song → 150ms
-const [productRes, commentsRes] = await Promise.allSettled([
-  apiFetch<Product>(`/product/${id}`),
-  apiFetch<Comment[]>(`/comment?productId=${id}`),
-])
-
-// Mức 2: song song + Suspense → sản phẩm hiện ở 150ms, comments stream sau
-// (xem code đầy đủ ở file 06, mục 5)
-
-// Mức 3: song song + Suspense + cache tag → sản phẩm hiện ở ~5ms từ cache
-product = await apiFetch<Product>(`/product/${id}`, {
-  cache: 'force-cache',
-  tags: ['products', `product:${id}`],
-})
-```
-
-| Cấu hình | Thời gian thấy sản phẩm | Tải lên backend |
-| --- | --- | --- |
-| Hiện tại | ~300ms | 2 request / page view |
-| Song song | ~150ms | 2 request / page view |
-| Song song + Suspense | ~150ms | 2 request / page view |
-| + cache tag | ~5ms (cache hit) | ~0 (chỉ khi invalidate) |
-
-Với một trang sản phẩm được xem hàng nghìn lần giữa hai lần sửa, mức 3 giảm tải backend gần như hoàn toàn.
-
----
-
-## 9. Ghi chú về Next.js 16: `cacheComponents` và `use cache`
-
-Next.js 16 đang đưa vào một mô hình cache tường minh hơn, thay vì suy ra từ các dynamic API. Ý tưởng
-cốt lõi: bạn **đánh dấu rõ** cái gì được cache bằng directive `'use cache'`:
-
-```tsx
-async function getPublicCatalog(query: string) {
-  'use cache'
-  return apiFetch<ProductListResult>(`/product${query}`)
-}
-```
-
-Thay vì "route này dynamic vì có ai đó gọi `cookies()` ở đâu đó", bạn nói rõ "hàm này được cache".
-Đây là hướng đi hợp lý — nó biến cache từ **hệ quả ngầm** thành **quyết định tường minh**.
-
-⚠️ Đây là tính năng đang phát triển và cấu hình có thể đổi giữa các bản. Trước khi áp vào production,
-hãy đọc release notes của đúng phiên bản Next.js bạn đang dùng (`16.2.10`), và **đừng bật nó cùng lúc
-với các thay đổi khác** — bạn sẽ không biết cái gì gây ra vấn đề gì.
-
-Nguyên tắc chung cho mọi thay đổi về cache: **đo trước, đo sau, đổi một thứ mỗi lần.**
-
----
-
-## 10. When to Use — bảng quyết định
-
-| Loại dữ liệu | Cấu hình | Lý do |
-| --- | --- | --- |
-| Riêng tư, per-user (cart, orders, account) | `{ auth: true }` + `no-store` | Cache là lỗ bảo mật |
-| Công khai, đổi ít (chi tiết sản phẩm) | `force-cache` + tag | Đọc nhiều, ghi ít |
-| Công khai, đổi vừa (danh mục, comment) | `force-cache` + tag hẹp | Vẫn cache được, invalidate chính xác |
-| Công khai, đổi theo thời gian (tồn kho) | `next: { revalidate: 60 }` | Không cần chính xác tuyệt đối |
-| Ghi (POST/PATCH/DELETE) | Không cache (tự động) | Mutation không bao giờ cache |
-
-## 11. When NOT to Cache
-
-- **Dữ liệu có xác thực, trừ khi tag chứa user ID.** Một cache key thiếu user ID là một lỗ hổng
-  nghiêm trọng: người dùng A thấy dữ liệu của B.
-- **Dữ liệu phải chính xác tuyệt đối tại thời điểm đọc.** Số dư, tồn kho lúc thanh toán, giá cuối cùng.
-- **Dữ liệu chỉ được đọc một lần** (trang cảm ơn sau khi đặt hàng). Cache không có ai hưởng.
-- **Khi bạn không biết cái gì invalidate nó.** Cache không có chiến lược invalidation rõ ràng sẽ
-  biến thành dữ liệu cũ mãi mãi — tệ hơn không cache.
-
----
-
-## 12. Trade-offs
-
-| Lợi ích của caching | Cái giá |
+| Previous | Cache Components |
 | --- | --- |
-| Giảm tải backend đáng kể | Rủi ro dữ liệu cũ — và nghiêm trọng nhất là **rò rỉ giữa các user** nếu key sai |
-| TTFB nhanh hơn nhiều, phục vụ từ CDN được | Phải thiết kế và bảo trì chiến lược invalidation |
-| Chịu tải tốt hơn khi traffic tăng | Debug khó: "dữ liệu này đến từ tầng cache nào?" |
-| Chi phí hạ tầng thấp hơn | Bốn tầng cache độc lập → nhiều tổ hợp có thể sai |
+| `fetch(url, { cache: 'force-cache', next: { tags: ['p'] } })` | `'use cache'` + `cacheTag('p')` |
+| `next: { revalidate: 3600 }` / `export const revalidate = 3600` | `cacheLife('hours')` |
+| `export const dynamic = 'force-dynamic'` | Bỏ đi — không cache là mặc định |
+| `unstable_noStore()` | Bỏ đi; cần ép request-time thì `await connection()` + `<Suspense>` |
+| `unstable_cache(fn, keys, { tags })` | `'use cache'` (key tự suy từ tham số) |
 
-| Lợi ích của `no-store` (cách repo chọn) | Cái giá |
-| --- | --- |
-| Luôn đúng; không thể rò rỉ dữ liệu qua cache | Mỗi page view = round-trip backend |
-| Không cần nghĩ về invalidation | Không tận dụng được CDN cho nội dung công khai |
-| Đơn giản, một quy tắc | TTFB bị giới hạn bởi tốc độ backend |
-
-**Vì sao `no-store` là điểm khởi đầu đúng:** "chậm nhưng đúng" luôn tốt hơn "nhanh nhưng sai" cho dữ
-liệu người dùng. Tối ưu bằng cách **mở cache có chọn lọc** cho dữ liệu công khai — không phải bằng
-cách bật cache toàn cục rồi tìm chỗ tắt.
+⚠️ Bật `cacheComponents` là một migration (Suspense boundary, bỏ segment config) — đừng làm cùng lúc với
+thay đổi khác. **Đo trước, đo sau, đổi một thứ mỗi lần.**
 
 ---
 
-## 13. Best Practices
+## 10. Bảng quyết định
 
-1. **Phân biệt bốn tầng cache trước khi debug.** Đi theo thứ tự: DB → Data Cache → Route Cache → Router Cache.
+| Loại dữ liệu | Previous (repo) | Cache Components |
+| --- | --- | --- |
+| Per-user (cart, orders) | `{ auth: true }` + `no-store`; action dùng `refresh()`/`revalidatePath` | Không `'use cache'`, đặt trong `<Suspense>` |
+| Công khai, ít đổi (chi tiết SP) | `force-cache` + tag, `revalidateTag(tag, 'max')` | `'use cache'` + `cacheLife('hours')` + `cacheTag` |
+| User vừa sửa, phải thấy ngay | `updateTag` trong Server Action | `updateTag` |
+| Đổi theo thời gian (tồn kho hiển thị) | `next: { revalidate: 60 }` | `cacheLife('minutes')` |
+| Webhook từ backend báo đổi dữ liệu | Route Handler + `revalidateTag(tag, 'max')` (cần hết hạn ngay: `revalidateTag(tag, { expire: 0 })`) | Như bên trái |
 
-2. **`no-store` mặc định, `force-cache` + tag có chọn lọc.** Mặc định an toàn, tối ưu có chủ đích.
+### Khi KHÔNG nên cache
 
-3. **Sửa hai bug revalidation đã nêu:** thêm `revalidatePath(\`/orders/${orderId}\`)` vào
-   `cancelOrderAction`, và xử lý badge giỏ hàng trong layout.
+- **Dữ liệu có xác thực mà key không chứa user ID** — user A thấy dữ liệu của B. Lỗi bảo mật nghiêm trọng
+  nhất caching có thể gây ra.
+- **Dữ liệu phải chính xác tại thời điểm đọc:** tồn kho lúc thanh toán, giá cuối cùng.
+- **Dữ liệu chỉ đọc một lần** (trang cảm ơn sau đặt hàng).
+- **Khi không biết cái gì invalidate nó** — cache không có chiến lược invalidation = dữ liệu cũ mãi mãi.
 
-4. **Ưu tiên `revalidateTag` khi dữ liệu hiện ở nhiều trang.** Nó loại bỏ hẳn class bug "quên một URL".
+"Chậm nhưng đúng" tốt hơn "nhanh nhưng sai" cho dữ liệu người dùng: `no-store` là điểm khởi đầu đúng;
+tối ưu bằng cách **mở cache có chọn lọc** cho dữ liệu công khai.
 
-5. **Bọc `cache()` cho mọi hàm đọc dữ liệu không dùng `fetch`.** `getAccessPayload` là ứng viên rõ nhất —
-   lợi ích chính là tính nhất quán, không phải tốc độ.
+---
 
-6. **Đặt dynamic API ở nơi hẹp nhất.** `cookies()` trong một component nhỏ + Suspense, thay vì trong
-   layout — để phần còn lại prerender được.
+## 11. Best Practices
 
-7. **Đo, đừng đoán.** Thêm `console.log` vào `apiFetch`, chạy production build, đếm request.
-   Đây là cách kiểm tra memoization và cache rẻ nhất.
-
-8. **Không bao giờ cache dữ liệu per-user mà không có user ID trong tag.** Đây là lỗi bảo mật nghiêm
-   trọng nhất mà caching có thể gây ra.
+1. **Biết mình đang ở mô hình nào** (`cacheComponents` bật hay không) trước khi đọc docs hay debug.
+2. **Debug theo thứ tự:** DB → Data Cache → Route Cache → Client Cache.
+3. **Mutation trong Server Action phải báo cho Next:** `updateTag` (dữ liệu có cache) hoặc `refresh()` /
+   `revalidatePath` (dữ liệu `no-store`). Không gọi gì = UI không đổi.
+4. **`revalidateTag` luôn có tham số thứ hai** (`'max'`); cần read-your-writes thì `updateTag`.
+5. **Revalidate đúng mọi route bị ảnh hưởng** — đừng dựa vào việc 16.2 tình cờ render lại trang hiện tại.
+6. **Cache key phải sạch:** fetcher công khai không gửi header per-user; dữ liệu per-user phải có user ID trong key.
+7. **Bọc `cache()` cho hàm đọc dữ liệu không dùng `fetch`** (`getAccessPayload`).
+8. **Đo, đừng đoán:** log trong `apiFetch`, chạy production build, đếm request.
 
 ---
 
 ## Tự kiểm tra
 
-1. Kể bốn tầng cache của Next.js, chỗ chúng nằm, và thời gian sống của mỗi cái.
-2. `cache: 'no-store'` tắt tầng nào? **Không** tắt tầng nào?
-3. Nếu mọi fetch là `no-store`, tại sao `revalidatePath` vẫn cần thiết?
-4. Chỉ ra bug trong `cancelOrderAction` và cách sửa. Cách nào bền hơn?
-5. Vì sao `app/(store)/page.tsx` là dynamic dù không đọc cookie?
-6. `cache()` của React khác Request Memoization của Next.js ở điểm nào? Khi nào cần cái nào?
-7. Lỗi bảo mật nghiêm trọng nhất mà caching có thể gây ra là gì?
+1. Repo đang ở mô hình cache nào? Dấu hiệu nào trong `next.config.ts` cho biết?
+2. `cache: 'no-store'` tắt tầng nào, **không** tắt tầng nào?
+3. Server Action không gọi `revalidatePath`/`updateTag`/`refresh` thì response của nó chứa gì?
+4. Khác nhau giữa `revalidateTag(tag, 'max')`, `updateTag(tag)` và `refresh()`? Cái nào gọi được trong Route Handler?
+5. Vì sao bật `force-cache` thẳng trên `apiFetch` gần như không có cache hit?
+6. Vì sao `'use cache'` không thể bọc `apiFetch` hiện tại?
+7. `cache()` của React khác Request Memoization của Next và `'use cache'` ở điểm nào?
 
 ➡️ Tiếp theo: `11-server-actions-va-forms.md`

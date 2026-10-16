@@ -33,7 +33,7 @@ export function VerifyOtpForm({ email }: { email: string }) {
           <input type="hidden" name="email" value={email} />
           <div className="space-y-2">
             <Label htmlFor="otp">Verification code</Label>
-            <Input id="otp" name="otp" inputMode="numeric" maxLength={6} required placeholder="______" />
+            <Input id="otp" name="otp" inputMode="numeric" maxLength={6} required placeholder="______" autoComplete="one-time-code" />
           </div>
           <SubmitButton>Verify</SubmitButton>
         </form>

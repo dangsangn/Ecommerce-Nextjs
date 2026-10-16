@@ -13,6 +13,10 @@ describe('buildHeaders', () => {
     expect(h['x-client-id']).toBe('u1')
     expect(h['authorization']).toBe('tok')
   })
+  it('sets x-end-user-ip only when a client IP is given', () => {
+    expect(buildHeaders({ apiKey: 'K', clientIp: '1.2.3.4' })['x-end-user-ip']).toBe('1.2.3.4')
+    expect(buildHeaders({ apiKey: 'K' })['x-end-user-ip']).toBeUndefined()
+  })
   it('omits auth headers when the session is empty', () => {
     const h = buildHeaders({ apiKey: 'K', session: {} })
     expect(h['x-client-id']).toBeUndefined()

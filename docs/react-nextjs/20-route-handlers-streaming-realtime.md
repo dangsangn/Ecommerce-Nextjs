@@ -3,36 +3,27 @@
 > **Mục tiêu:** biết khi nào cần `route.ts` (và khi nào Server Action đủ), viết được streaming
 > response bằng Web Streams, và dựng theo dõi trạng thái đơn hàng realtime bằng SSE —
 > áp dụng trực tiếp vào tính năng order tracking của repo.
+>
+> Phiên bản: Next.js 16.2 — `GET` **không** cache mặc định, `params` là Promise, helper global
+> `RouteContext<'/route'>`, `revalidateTag(tag, profile)` hai tham số, `after()` stable.
 
 ---
 
-## 1. Overview
+## 1. Overview — Server Action hay Route Handler?
 
-### Repo này chưa có `route.ts` nào — và điều đó đúng
-
-```bash
-$ find app -name "route.ts"
-# (không có kết quả)
-```
-
-Mọi mutation đi qua Server Actions. Mọi đọc dữ liệu đi qua Server Components. **Đây là kiến trúc đúng**
-cho một app chỉ có một client là chính nó.
-
-Vậy khi nào bạn *thực sự* cần route handler?
-
-### Bảng quyết định: Server Action vs Route Handler
+Repo này **chưa có `route.ts` nào** — và đó là đúng: mọi mutation đi qua Server Actions, mọi đọc dữ
+liệu đi qua Server Components. Với một app chỉ có một client là chính nó, không cần endpoint riêng.
 
 | Nhu cầu | Dùng | Vì sao |
 | --- | --- | --- |
 | Form submit, mutation từ UI của mình | **Server Action** | Ít code, type-safe, progressive enhancement |
 | Đọc dữ liệu để render | **Server Component** | Không cần endpoint |
 | **Webhook từ bên thứ ba** | **Route Handler** | Họ POST vào một URL cố định, không biết action ID |
-| **Mobile app / client ngoài gọi vào** | **Route Handler** | Cần URL ổn định, JSON contract |
+| **Mobile app / client ngoài** | **Route Handler** | Cần URL ổn định, JSON contract |
 | **Streaming response** (SSE, chunked) | **Route Handler** | Server Action trả một giá trị, không phải stream |
-| **Trả file** (PDF, CSV, image) | **Route Handler** | Cần set `Content-Type`, `Content-Disposition` |
-| **Cần kiểm soát HTTP status/header** | **Route Handler** | Server Action không set được status |
-| Health check / monitoring | **Route Handler** | `/api/health` phải là URL cố định |
-| `robots.txt`, `sitemap.xml`, OG image | **Route Handler** hoặc file convention | Cần content-type riêng |
+| **Trả file** (PDF, CSV) | **Route Handler** | Cần `Content-Type`, `Content-Disposition` |
+| **Kiểm soát HTTP status/header** | **Route Handler** | Server Action không set được status |
+| `robots.txt`, `sitemap.xml`, OG image | **File convention** (`sitemap.ts`…) | Next có sẵn, đừng tự viết route |
 
 > **Nguyên tắc:** Server Action cho **UI của bạn**. Route Handler cho **mọi thứ khác gọi vào**.
 
@@ -42,27 +33,30 @@ Vậy khi nào bạn *thực sự* cần route handler?
 
 ### 🧠 Route Handler là một hàm `(Request) => Response`
 
-Không có gì React trong đó. Nó là Web Platform thuần:
+Không có gì React trong đó — Web Platform thuần. Export một function **cho mỗi HTTP method**:
 
 ```tsx
 // app/api/health/route.ts
-export async function GET(request: Request): Promise<Response> {
+export async function GET() {
   return Response.json({ status: 'ok' })
 }
+
+export async function POST(request: Request) { /* ... */ }
+// Hỗ trợ: GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS.
+// Method không export → 405. OPTIONS không export → Next tự trả với header `Allow` đúng.
 ```
 
-Bạn export một function **cho mỗi HTTP method** bạn muốn hỗ trợ:
+⚠️ `route.ts` **không được** nằm cùng thư mục với `page.tsx` (cùng segment là xung đột). Vì vậy route
+handler thường đặt dưới `app/api/...`.
 
-```tsx
-export async function GET(req: Request) { /* ... */ }
-export async function POST(req: Request) { /* ... */ }
-export async function PATCH(req: Request) { /* ... */ }
-export async function DELETE(req: Request) { /* ... */ }
-// Method không export → tự động trả 405 Method Not Allowed
-```
+### 🧠 `GET` không cache mặc định
 
-**Điểm mấu chốt:** vì đây là `Request`/`Response` chuẩn Web, mọi thứ bạn biết về HTTP đều áp dụng —
-và code này chạy được ở cả Node runtime và Edge runtime (nếu không dùng Node API).
+| Phiên bản | `GET` handler mặc định |
+| --- | --- |
+| Next 13–14 | **Static** — chạy một lần lúc build (bẫy kinh điển: "API trả dữ liệu cũ") |
+| **Next 15+ (repo: 16.2)** | **Dynamic** — chạy mỗi request |
+
+Muốn cache phải **opt-in** (mục 7). Các method khác (`POST`…) không bao giờ cache.
 
 ---
 
@@ -70,25 +64,20 @@ và code này chạy được ở cả Node runtime và Edge runtime (nếu khô
 
 ```tsx
 // app/api/orders/[id]/invoice/route.ts
-import { NextRequest } from 'next/server'
+import type { NextRequest } from 'next/server'
 import { apiFetch } from '@/lib/api/server-client'
 import { ApiError } from '@/lib/api/http'
 import { getClientId } from '@/lib/auth/session'
+import { toPriceNumber } from '@/lib/products/price'
 import type { Order } from '@/types/order'
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },     // ⭐ params là Promise, như page
-) {
+export async function GET(_req: NextRequest, ctx: RouteContext<'/api/orders/[id]/invoice'>) {
   // 1. XÁC THỰC — route handler là endpoint công khai, giống Server Action (file 11)
   const clientId = await getClientId()
-  if (!clientId) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  if (!clientId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { id } = await params
-
-  // 2. VALIDATE input
+  // 2. VALIDATE input — params là Promise (Next 15+)
+  const { id } = await ctx.params
   if (!/^[a-f\d]{24}$/i.test(id)) {
     return Response.json({ error: 'Invalid order id' }, { status: 400 })
   }
@@ -98,16 +87,13 @@ export async function GET(
   try {
     order = await apiFetch<Order>(`/order/${id}`, { auth: true })
   } catch (e) {
-    if (e instanceof ApiError) {
-      return Response.json({ error: e.message }, { status: e.status })
-    }
+    if (e instanceof ApiError) return Response.json({ error: e.message }, { status: e.status })
     console.error('[invoice] unexpected', e)
     return Response.json({ error: 'Internal error' }, { status: 500 })
   }
 
   // 4. TRẢ VỀ với header đúng
-  const csv = buildInvoiceCsv(order)
-  return new Response(csv, {
+  return new Response(buildInvoiceCsv(order), {
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="invoice-${id.slice(-6)}.csv"`,
@@ -116,31 +102,43 @@ export async function GET(
   })
 }
 
+const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
+
 function buildInvoiceCsv(order: Order): string {
   const rows = [['Sản phẩm', 'Số lượng', 'Đơn giá']]
   for (const shop of order.order_products) {
     for (const item of shop.item_products) {
-      rows.push([item.name, String(item.quantity), String(item.price)])
+      // price là Decimal (có thể là { $numberDecimal }) → chuẩn hoá, đừng String() thẳng
+      rows.push([item.name, String(item.quantity), String(toPriceNumber(item.price))])
     }
   }
-  // BOM ﻿ để Excel nhận UTF-8 (tiếng Việt không bị lỗi font)
-  return '﻿' + rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(',')).join('\n')
+  // BOM ﻿ để Excel nhận UTF-8 (tiếng Việt không vỡ font)
+  return '﻿' + rows.map((r) => r.map(cell).join(',')).join('\n')
 }
 ```
 
 **Bốn chi tiết đáng học:**
 
-**(1) `params` là Promise** — giống `page.tsx` (file `09`), cùng lý do.
+1. **`RouteContext<'/api/orders/[id]/invoice'>`** — helper **global** (sinh bởi `next dev`/`next build`/
+   `next typegen`, không cần import), suy ra kiểu `params` từ route literal. Gõ sai đường dẫn → lỗi
+   compile. Cách viết tay tương đương: `{ params }: { params: Promise<{ id: string }> }`.
+2. **`ApiError.status` map 1:1 sang HTTP status** — nơi `status` trong `ApiError` (file `10`) phát huy
+   giá trị.
+3. **`Cache-Control: private, no-store`** cho dữ liệu riêng tư — thiếu thì CDN/proxy có thể cache hoá
+   đơn của người A rồi trả cho người B. Lỗ bảo mật nghiêm trọng nhất route handler có thể gây ra.
+4. **BOM cho CSV tiếng Việt** — không có nó Excel hiện "Ão thun" thay vì "Áo thun".
 
-**(2) `ApiError.status` được dùng trực tiếp** làm HTTP status. Đây là nơi `status` trong `ApiError`
-(file `10`, mục "chưa dùng") cuối cùng phát huy giá trị: nó map 1:1 sang response.
+📄 Đọc body và query:
 
-**(3) `Cache-Control: private, no-store`** cho dữ liệu riêng tư. **Bắt buộc** — nếu thiếu, CDN hoặc
-proxy có thể cache hoá đơn của người này và trả cho người khác. Đây là lỗ bảo mật nghiêm trọng nhất
-mà route handler có thể gây ra.
-
-**(4) BOM `﻿` cho CSV tiếng Việt.** Không có nó, Excel mở file và hiện "Ãáo thun" thay vì "Áo thun".
-Loại chi tiết chỉ biết khi đã từng bị.
+```tsx
+export async function POST(request: NextRequest) {
+  const q = request.nextUrl.searchParams.get('q')        // ?q=...
+  const body = await request.json()                      // hoặc .text() / .formData()
+  const parsed = createReviewSchema.safeParse(body)      // ⭐ body là `unknown` — luôn validate (zod)
+  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 422 })
+  // ...
+}
+```
 
 ---
 
@@ -148,66 +146,45 @@ Loại chi tiết chỉ biết khi đã từng bị.
 
 Server Action trả về **một giá trị**. Route handler có thể trả về **một dòng dữ liệu chảy dần**.
 
-### Ví dụ: export toàn bộ sản phẩm ra CSV
+### Ví dụ: seller export toàn bộ sản phẩm ra CSV
 
-Vấn đề: seller có 50.000 sản phẩm. Build cả CSV trong memory rồi trả về:
-- Tốn ~50MB RAM cho một request
-- TTFB rất chậm (phải fetch hết mọi trang trước khi gửi byte đầu)
-- Có thể timeout
+Seller có 50.000 sản phẩm. Build cả CSV trong memory rồi trả: tốn RAM, byte đầu tiên chỉ đến sau khi
+fetch hết mọi trang, dễ timeout. Streaming: gửi header ngay, mỗi trang fetch xong thì đẩy luôn.
 
 ```tsx
 // app/api/seller/products/export/route.ts
 import { apiFetch } from '@/lib/api/server-client'
-import { getAccessPayload } from '@/lib/auth/session'
+import { isShop } from '@/lib/auth/session'
+import { toPriceNumber } from '@/lib/products/price'
 import type { ProductListResult } from '@/types/product'
 
-const PAGE_SIZE = 100
+const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
 
-function csvCell(v: unknown): string {
-  return `"${String(v ?? '').replace(/"/g, '""')}"`
-}
-
-export async function GET() {
-  const payload = await getAccessPayload()
-  if (!payload?.roles?.includes('shop')) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 })
-  }
+export async function GET(request: Request) {
+  // ⭐ Mọi kiểm tra CÓ THỂ THẤT BẠI nằm TRƯỚC khi mở stream
+  if (!(await isShop())) return Response.json({ error: 'Forbidden' }, { status: 403 })
 
   const encoder = new TextEncoder()
-
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        // Gửi BOM + header NGAY → browser bắt đầu tải file lập tức
-        controller.enqueue(encoder.encode('﻿'))
-        controller.enqueue(encoder.encode('id,name,type,price,quantity\n'))
-
-        let page = 1
-        let hasNext = true
-        while (hasNext) {
+        controller.enqueue(encoder.encode('﻿id,name,type,price,quantity\n'))   // browser bắt đầu tải ngay
+        for (let page = 1, hasNext = true; hasNext; page++) {
+          if (request.signal.aborted) break                 // người dùng huỷ tải → dừng fetch backend
           const result = await apiFetch<ProductListResult>(
-            `/product/list/published?page=${page}&limit=${PAGE_SIZE}`,
-            { auth: true },
+            `/product/list/published?page=${page}&limit=100`, { auth: true },
           )
           for (const p of result.data) {
-            const line = [
-              csvCell(p._id),
-              csvCell(p.product_name),
-              csvCell(p.product_type),
-              csvCell(p.product_price),
-              csvCell(p.product_quantity),
-            ].join(',')
-            controller.enqueue(encoder.encode(line + '\n'))
+            const line = [p._id, p.product_name, p.product_type, toPriceNumber(p.product_price), p.product_quantity]
+            controller.enqueue(encoder.encode(line.map(cell).join(',') + '\n'))
           }
           hasNext = result.pagination.hasNextPage
-          page += 1
         }
-        controller.close()
       } catch (e) {
-        console.error('[export] failed at streaming', e)
-        // ⚠️ Đã gửi byte rồi → KHÔNG đổi được status thành 500.
-        // Cách duy nhất: viết một dòng lỗi vào chính file để người dùng thấy.
+        console.error('[export] failed while streaming', e)
+        // ⚠️ Đã gửi byte → KHÔNG đổi được status thành 500. Báo lỗi TRONG nội dung.
         controller.enqueue(encoder.encode('\n"LỖI: xuất dữ liệu bị ngắt, file không đầy đủ"\n'))
+      } finally {
         controller.close()
       }
     },
@@ -217,84 +194,36 @@ export async function GET() {
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': 'attachment; filename="products.csv"',
-      'Cache-Control': 'no-store',
+      'Cache-Control': 'private, no-store',
     },
   })
 }
 ```
 
-**Lợi ích đo được:**
+⚠️ **Một khi byte đầu tiên đã gửi, status 200 đã đi rồi** — cùng giới hạn với streaming HTML (file
+`06`, `13`). Cách duy nhất là báo lỗi **trong chính stream**: CSV → một dòng cảnh báo; SSE → một event
+`error`; NDJSON → một object `{ "error": ... }` cuối.
 
-| | Build hết rồi trả | Streaming |
-| --- | --- | --- |
-| TTFB | ~30 giây (50k sản phẩm) | **~200ms** |
-| RAM peak | ~50MB | **~100KB** (một trang) |
-| Người dùng thấy gì | Trang treo 30s | Dialog "Save file" hiện ngay, progress tăng dần |
-| Timeout risk | Cao | Thấp (kết nối luôn có dữ liệu) |
-
-⚠️ **Điểm quan trọng ở khối `catch`:** một khi đã `enqueue` byte đầu tiên, response đã được gửi với
-status 200. **Bạn không thể đổi thành 500.** Đây là cùng giới hạn đã nói ở file `06` (streaming HTML)
-và file `13`.
-
-Cách xử lý duy nhất là **báo lỗi trong chính nội dung stream**. Với CSV: một dòng cảnh báo. Với SSE:
-một event `error`. Với JSON stream: một object `{ error: ... }` cuối cùng.
-
-**Hệ quả thiết kế:** làm mọi việc **có thể thất bại** (xác thực, validate, kiểm tra quyền) **TRƯỚC**
-khi mở stream. Ở ví dụ trên, `getAccessPayload` và kiểm tra role đều nằm trước `new ReadableStream`.
+**Hệ quả thiết kế:** xác thực, validate, kiểm tra quyền **trước** `new ReadableStream`.
 
 ---
 
-## 5. ⭐ Realtime: theo dõi trạng thái đơn hàng bằng SSE
-
-Đây là ứng dụng có giá trị nhất cho repo này.
+## 5. ⭐ Realtime: theo dõi trạng thái đơn hàng
 
 ### Vấn đề hiện tại
 
-📄 `components/store/order-status-timeline.tsx` hiển thị tiến trình đơn hàng:
+📄 `app/(store)/orders/[id]/page.tsx` render `<OrderStatusTimeline status={order.order_status} />`
+(Server Component, đi theo `ORDER_PROGRESSION = ['pending', 'confirmed', 'shipping', 'delivered']` trong
+`lib/orders/display.ts`). Trạng thái đổi ở **backend** (shop xác nhận, shipper nhận hàng), nhưng người
+đang xem trang **không biết gì** — phải tự F5.
 
-```tsx
-import { ORDER_PROGRESSION } from '@/lib/orders/display'
-
-export function OrderStatusTimeline({ status }: { status: OrderStatus }) {
-  if (status === 'cancelled' || status === 'failed') { /* ... */ }
-  const currentIndex = ORDER_PROGRESSION.indexOf(status)
-  return (
-    <ol className="flex flex-wrap items-center gap-2">
-      {ORDER_PROGRESSION.map((step, i) => {
-        const done = i <= currentIndex
-        // ...
-      })}
-    </ol>
-  )
-}
-```
-
-📄 `lib/orders/display.ts`:
-
-```tsx
-export const ORDER_PROGRESSION: OrderStatus[] = ['pending', 'confirmed', 'shipping', 'delivered']
-```
-
-**Trạng thái này thay đổi ở phía backend** (khi shop xác nhận, khi shipper nhận hàng). Nhưng người dùng
-đang xem `/orders/abc123` **không biết gì** — họ phải tự F5.
-
-Đây chính là trải nghiệm mà một app giao hàng **không được** có.
-
-### Ba lựa chọn kỹ thuật
-
-| Cách | Ưu | Nhược | Phù hợp với repo? |
+| Cách | Ưu | Nhược | Cho repo? |
 | --- | --- | --- | --- |
-| **Polling** (`setInterval` + `router.refresh()`) | Đơn giản nhất, không cần backend mới | Tốn request; trễ tới `interval` | ✅ Bắt đầu ở đây |
-| **SSE** (Server-Sent Events) | Một chiều server→client; dùng HTTP thường; tự reconnect | Chỉ text; giới hạn 6 kết nối/domain trên HTTP/1.1 | ✅ **Đúng nhất cho ca này** |
-| **WebSocket** | Hai chiều, độ trễ thấp nhất | Cần server riêng (không chạy trên serverless function); phức tạp hơn | ❌ Quá mức — ta chỉ cần một chiều |
+| **Polling** (`router.refresh()` định kỳ) | Đơn giản nhất, không cần endpoint | Tốn request; trễ tới `interval` | ✅ Bắt đầu ở đây |
+| **SSE** (Server-Sent Events) | Một chiều server→client; HTTP thường; tự reconnect | Chỉ text; 6 kết nối/domain trên HTTP/1.1 | ✅ Khi polling không đủ |
+| **WebSocket** | Hai chiều, trễ thấp nhất | Cần server riêng (không chạy trên serverless function) | ❌ Quá mức — chỉ cần một chiều |
 
-**Vì sao SSE là đúng cho order tracking:** dữ liệu chỉ đi **một chiều** (server → client), là **text**,
-và tần suất **thấp** (vài lần trong cả vòng đời đơn hàng). SSE làm đúng việc đó với một `Response`
-thường và tự động reconnect miễn phí.
-
-### Bước 1 — Cách đơn giản trước: polling
-
-Luôn bắt đầu ở đây. Nếu nó đủ tốt, dừng lại.
+### Bước 1 — Polling trước. Nếu đủ tốt, dừng lại.
 
 ```tsx
 // components/store/order-status-poller.tsx
@@ -305,37 +234,19 @@ import type { OrderStatus } from '@/types/order'
 
 const TERMINAL: OrderStatus[] = ['delivered', 'cancelled', 'failed']
 
-/**
- * Refresh trang định kỳ khi đơn hàng còn đang chạy.
- * Dừng hẳn khi đã tới trạng thái cuối — không polling vô ích.
- */
-export function OrderStatusPoller({
-  status,
-  intervalMs = 20_000,
-}: {
-  status: OrderStatus
-  intervalMs?: number
-}) {
+export function OrderStatusPoller({ status, intervalMs = 20_000 }: { status: OrderStatus; intervalMs?: number }) {
   const router = useRouter()
 
   useEffect(() => {
-    if (TERMINAL.includes(status)) return          // đơn đã xong → không poll
-
-    const tick = () => {
-      // Không poll khi tab đang ẩn — tiết kiệm pin và request
+    if (TERMINAL.includes(status)) return                     // đơn đã xong → không poll
+    const refreshIfVisible = () => {
       if (document.visibilityState === 'visible') router.refresh()
     }
-    const timer = setInterval(tick, intervalMs)
-
-    // Refresh ngay khi người dùng quay lại tab
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') router.refresh()
-    }
-    document.addEventListener('visibilitychange', onVisible)
-
+    const timer = setInterval(refreshIfVisible, intervalMs)    // tab ẩn → bỏ qua, tiết kiệm pin
+    document.addEventListener('visibilitychange', refreshIfVisible)   // quay lại tab → refresh ngay
     return () => {
       clearInterval(timer)
-      document.removeEventListener('visibilitychange', onVisible)
+      document.removeEventListener('visibilitychange', refreshIfVisible)
     }
   }, [status, intervalMs, router])
 
@@ -343,25 +254,17 @@ export function OrderStatusPoller({
 }
 ```
 
-Gắn vào trang chi tiết:
-
 ```tsx
 // app/(store)/orders/[id]/page.tsx
 <OrderStatusTimeline status={order.order_status} />
 <OrderStatusPoller status={order.order_status} />
 ```
 
-**`router.refresh()` làm gì?** Nó yêu cầu server render lại route hiện tại và gửi RSC payload mới.
-State của Client Component **được giữ** (nhớ file `13`: soft navigation không thay fiber). Nên nếu
-người dùng đang gõ một comment, họ không mất gì.
+**`router.refresh()`** yêu cầu server render lại route hiện tại và gửi RSC payload mới; **state của
+Client Component được giữ** (file `13`) — người dùng đang gõ comment không mất gì.
 
-**Ba chi tiết làm poller này tốt:**
-- Dừng khi trạng thái là terminal — không có polling vĩnh viễn
-- Không poll khi tab ẩn (`visibilityState`) — tiết kiệm pin trên mobile
-- Refresh **ngay** khi quay lại tab — người dùng thấy dữ liệu mới lập tức, không chờ hết interval
-
-⚖️ **Đánh giá:** với 20 giây/lần và đơn hàng sống ~2 ngày, đó là ~8.600 request cho mỗi tab đang mở.
-Nếu ít người mở trang đơn hàng lâu, hoàn toàn chấp nhận được. **Nếu vậy, đừng làm SSE.**
+⚖️ 20 giây/lần × đơn sống ~2 ngày ≈ 8.600 request cho **mỗi tab đang mở**. Ít người treo trang đơn hàng
+lâu → chấp nhận được. **Nếu vậy, đừng làm SSE.**
 
 ### Bước 2 — SSE khi polling không đủ
 
@@ -373,80 +276,49 @@ import type { Order, OrderStatus } from '@/types/order'
 
 const TERMINAL: OrderStatus[] = ['delivered', 'cancelled', 'failed']
 const POLL_MS = 5_000
-const MAX_DURATION_MS = 5 * 60 * 1000     // tự đóng sau 5 phút; client sẽ reconnect
+const MAX_DURATION_MS = 5 * 60_000        // tự đóng sau 5 phút; EventSource sẽ reconnect
 
-// SSE cần kết nối sống lâu → Node runtime, không Edge
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'    // không bao giờ cache
-
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  // ⭐ Mọi kiểm tra CÓ THỂ THẤT BẠI phải nằm TRƯỚC khi mở stream
-  const clientId = await getClientId()
-  if (!clientId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const { id } = await params
-  if (!/^[a-f\d]{24}$/i.test(id)) {
-    return Response.json({ error: 'Invalid order id' }, { status: 400 })
-  }
+export async function GET(request: Request, ctx: RouteContext<'/api/orders/[id]/stream'>) {
+  // ⭐ Kiểm tra TRƯỚC khi mở stream
+  if (!(await getClientId())) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await ctx.params
+  if (!/^[a-f\d]{24}$/i.test(id)) return Response.json({ error: 'Invalid order id' }, { status: 400 })
 
   const encoder = new TextEncoder()
+  let closed = false                        // dùng chung cho start() và cancel()
+  let keepAlive: ReturnType<typeof setInterval> | undefined
 
   const stream = new ReadableStream({
     async start(controller) {
-      let closed = false
-      const startedAt = Date.now()
+      const write = (chunk: string) => { if (!closed) controller.enqueue(encoder.encode(chunk)) }
+      const send = (event: string, data: unknown) => write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 
-      /** Format một SSE event. Định dạng: "event: X\ndata: Y\n\n" */
-      const send = (event: string, data: unknown) => {
-        if (closed) return
-        controller.enqueue(
-          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-        )
-      }
-
-      const finish = () => {
-        if (closed) return
-        closed = true
-        controller.close()
-      }
-
-      // Comment SSE (dòng bắt đầu bằng ':') để giữ kết nối sống qua proxy
-      const keepAlive = setInterval(() => {
-        if (!closed) controller.enqueue(encoder.encode(': keep-alive\n\n'))
-      }, 15_000)
-
-      let lastStatus: OrderStatus | null = null
+      // Comment SSE (dòng bắt đầu bằng ':') giữ kết nối sống qua proxy/load balancer
+      keepAlive = setInterval(() => write(': keep-alive\n\n'), 15_000)
+      request.signal.addEventListener('abort', () => { closed = true })   // client đóng tab
 
       try {
-        while (!closed && Date.now() - startedAt < MAX_DURATION_MS) {
+        let last: OrderStatus | null = null
+        for (const startedAt = Date.now(); !closed && Date.now() - startedAt < MAX_DURATION_MS; ) {
           const order = await apiFetch<Order>(`/order/${id}`, { auth: true })
-
-          if (order.order_status !== lastStatus) {
-            lastStatus = order.order_status
-            send('status', {
-              status: order.order_status,
-              trackingNumber: order.order_tracking_number ?? null,
-            })
+          if (order.order_status !== last) {
+            last = order.order_status
+            send('status', { status: last, trackingNumber: order.order_tracking_number ?? null })
           }
-
-          if (TERMINAL.includes(order.order_status)) {
-            send('done', { status: order.order_status })
-            break
-          }
-
+          if (TERMINAL.includes(order.order_status)) { send('done', { status: last }); break }
           await new Promise((r) => setTimeout(r, POLL_MS))
         }
       } catch (e) {
         console.error('[order-stream]', e)
-        // Đã gửi byte → báo lỗi TRONG stream, không đổi được HTTP status
-        send('error', { message: 'Mất kết nối theo dõi đơn hàng' })
+        send('error', { message: 'Mất kết nối theo dõi đơn hàng' })   // báo lỗi TRONG stream
       } finally {
         clearInterval(keepAlive)
-        finish()
+        if (!closed) { closed = true; controller.close() }
       }
+    },
+    cancel() {                              // consumer huỷ stream → dừng vòng lặp, không enqueue nữa
+      closed = true
+      clearInterval(keepAlive)
     },
   })
 
@@ -455,98 +327,72 @@ export async function GET(
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',      // tắt buffering của nginx — nếu không, event bị giữ lại
+      'X-Accel-Buffering': 'no',            // tắt buffering của nginx
     },
   })
 }
 ```
 
-**Năm chi tiết bắt buộc mà thiếu là không hoạt động:**
+⚠️ **Phải dừng khi client ngắt kết nối** (`request.signal` + `cancel()`). Thiếu nó, vòng lặp vẫn gọi
+backend mỗi 5 giây suốt 5 phút cho một tab đã đóng — và `enqueue` vào stream đã huỷ sẽ throw.
 
-| Chi tiết | Thiếu thì sao |
+| Chi tiết bắt buộc | Thiếu thì sao |
 | --- | --- |
-| `Content-Type: text/event-stream` | Browser coi là text thường, `EventSource` không parse |
-| `Cache-Control: no-cache, no-transform` | Proxy có thể cache hoặc nén → stream bị giữ |
-| `X-Accel-Buffering: no` | **nginx buffer cả stream** → event chỉ đến khi đóng kết nối |
-| Keep-alive comment (`: ...`) | Proxy/load balancer đóng kết nối "idle" sau ~30-60s |
-| `runtime = 'nodejs'` | Edge runtime có giới hạn thời gian thực thi ngắn |
+| `Content-Type: text/event-stream` | `EventSource` không parse |
+| `Cache-Control: no-cache, no-transform` | Proxy cache hoặc nén → stream bị giữ |
+| `X-Accel-Buffering: no` | nginx buffer cả stream → event chỉ đến khi đóng kết nối |
+| Keep-alive comment (`: ...`) | Proxy/LB đóng kết nối "idle" sau ~30–60s |
+| Node runtime (mặc định — **đừng** đặt `runtime = 'edge'`) | Edge giới hạn thời gian thực thi |
 
-**Định dạng SSE** — chỉ ba quy tắc:
+Không cần `export const dynamic = 'force-dynamic'`: `GET` vốn đã dynamic, và handler còn đọc cookie.
+
+**Định dạng SSE:**
+
 ```
-event: status          ← tên event (tuỳ chọn; mặc định là "message")
-data: {"status":"shipping"}   ← payload, phải một dòng
-                       ← DÒNG TRỐNG kết thúc event (bắt buộc!)
+event: status                  ← tên event (tuỳ chọn; mặc định "message")
+data: {"status":"shipping"}    ← payload; nhiều dòng data liên tiếp được nối bằng \n
+                               ← DÒNG TRỐNG kết thúc event (bắt buộc — thiếu là browser chờ mãi)
 ```
 
-Dòng trống là chỗ dễ quên nhất. Không có nó, browser chờ mãi.
-
-### Bước 3 — Client nhận event
+### Bước 3 — Client nhận event: realtime là trigger, không phải store
 
 ```tsx
 // components/store/order-status-live.tsx
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import type { OrderStatus } from '@/types/order'
 
 const TERMINAL: OrderStatus[] = ['delivered', 'cancelled', 'failed']
 
-const LABELS: Record<OrderStatus, string> = {
-  pending: 'Chờ xác nhận',
-  confirmed: 'Đã xác nhận',
-  shipping: 'Đang giao',
-  delivered: 'Đã giao',
-  cancelled: 'Đã huỷ',
-  failed: 'Thất bại',
-}
-
-export function OrderStatusLive({
-  orderId,
-  initialStatus,
-}: {
-  orderId: string
-  initialStatus: OrderStatus
-}) {
+export function OrderStatusLive({ orderId, initialStatus }: { orderId: string; initialStatus: OrderStatus }) {
   const router = useRouter()
-  const [status, setStatus] = useState(initialStatus)
 
   useEffect(() => {
-    if (TERMINAL.includes(initialStatus)) return     // đơn đã xong, không mở kết nối
-
+    if (TERMINAL.includes(initialStatus)) return              // đơn đã xong, không mở kết nối
+    let last = initialStatus
     const es = new EventSource(`/api/orders/${orderId}/stream`)
 
     es.addEventListener('status', (e) => {
-      const data = JSON.parse((e as MessageEvent).data) as { status: OrderStatus }
-      setStatus((prev) => {
-        if (prev !== data.status) {
-          toast.info(`Đơn hàng: ${LABELS[data.status]}`)
-          // Lấy lại toàn bộ dữ liệu server (tracking number, thời gian…)
-          router.refresh()
-        }
-        return data.status
-      })
+      const { status } = JSON.parse(e.data) as { status: OrderStatus }
+      if (status === last) return                             // event đầu = trạng thái hiện tại → bỏ qua
+      last = status
+      toast.info(`Đơn hàng chuyển sang: ${status}`)
+      router.refresh()                                        // Server Component render lại với dữ liệu mới
     })
-
     es.addEventListener('done', () => es.close())
-
-    es.addEventListener('error', () => {
-      // EventSource TỰ reconnect khi lỗi mạng — đây là lợi ích chính của SSE.
-      // Nhưng nếu server chủ động đóng (readyState CLOSED) thì không reconnect.
-      if (es.readyState === EventSource.CLOSED) {
-        console.warn('[order-stream] server closed the connection')
-      }
-    })
+    // Lỗi mạng: EventSource TỰ reconnect. Server trả non-200 → readyState CLOSED, không reconnect.
 
     return () => es.close()
   }, [orderId, initialStatus, router])
 
-  // Component này chỉ điều phối — hiển thị vẫn do OrderStatusTimeline (Server Component)
   return null
 }
 ```
 
-Gắn vào trang:
+❌ Đừng gọi `toast`/`router.refresh()` **bên trong** updater của `setState` — updater phải pure, Strict
+Mode gọi nó hai lần → toast đôi. Ở đây component **không cần state** vì nó không render gì.
 
 ```tsx
 // app/(store)/orders/[id]/page.tsx
@@ -554,221 +400,174 @@ Gắn vào trang:
 <OrderStatusLive orderId={order._id} initialStatus={order.order_status} />
 ```
 
-**Chú ý thiết kế:** `OrderStatusLive` **không render UI**. Nó nhận event, toast, rồi gọi `router.refresh()`
-để Server Component render lại với dữ liệu mới. Nhờ đó:
+`OrderStatusLive` nhận event → `router.refresh()` → Server Component render lại. Nhờ đó
+`OrderStatusTimeline` vẫn là Server Component (0 byte JS), không có hai nguồn sự thật, và mọi dữ liệu
+liên quan (tracking number, ngày) cập nhật cùng lúc.
 
-- `OrderStatusTimeline` vẫn là **Server Component** (0 byte JS)
-- Không có hai nguồn sự thật cho trạng thái
-- Mọi dữ liệu liên quan (tracking number, ngày) cũng được cập nhật, không chỉ status
-
-Đây là pattern **"realtime như một trigger, không phải như một store"** — và nó đơn giản hơn nhiều so
-với việc tự quản state ở client.
-
-⚠️ **Giới hạn của SSE cần biết:** trên HTTP/1.1, browser giới hạn **6 kết nối đồng thời mỗi domain**.
-Nếu người dùng mở 6 tab đơn hàng, tab thứ 7 (và mọi request khác!) bị chặn. Trên HTTP/2 giới hạn cao
-hơn nhiều (multiplexing). **Kiểm tra hosting của bạn có HTTP/2 chưa** — nếu chưa, polling an toàn hơn.
+⚠️ **Giới hạn 6 kết nối/domain trên HTTP/1.1** (tính chung mọi tab): mở 6 tab đơn hàng là tab thứ 7 —
+và mọi request khác tới domain — bị treo. HTTP/2 multiplex nên gần như không còn giới hạn này. Hosting
+chưa có HTTP/2 → polling an toàn hơn.
 
 ---
 
 ## 6. Webhook: nhận callback từ cổng thanh toán
 
-📄 Repo có `order_payment.method` với `'COD' | 'CARD' | 'MOMO'`. Với CARD và MOMO, cổng thanh toán
-sẽ **POST vào URL của bạn** để báo kết quả. Đây là ca dùng route handler **không thể thay thế** —
-MoMo không biết gì về Server Action ID.
+📄 `Order.order_payment.method` của repo nhận `'COD' | 'CARD' | 'MOMO'`. Với MOMO, cổng thanh toán sẽ
+**POST vào URL của bạn** để báo kết quả — ca dùng route handler **không thể thay thế**.
 
 ```tsx
 // app/api/webhooks/momo/route.ts
 import crypto from 'node:crypto'
-import { revalidatePath, revalidateTag } from 'next/cache'
-
-export const runtime = 'nodejs'          // cần node:crypto
-export const dynamic = 'force-dynamic'
+import { after } from 'next/server'
+import { revalidateTag } from 'next/cache'
 
 interface MomoPayload {
-  orderId: string
-  requestId: string
-  resultCode: number
-  amount: number
-  transId: string
-  signature: string
+  orderId: string; requestId: string; resultCode: number; amount: number; transId: string; signature: string
 }
 
-/**
- * Xác thực HMAC bằng so sánh THỜI GIAN HẰNG SỐ.
- *
- * So sánh chuỗi thường (===) thoát sớm ở byte đầu khác nhau → kẻ tấn công
- * đo thời gian để đoán dần signature. timingSafeEqual luôn mất cùng thời gian.
- */
-function verifySignature(payload: MomoPayload, secret: string): boolean {
-  const raw = [
-    `amount=${payload.amount}`,
-    `orderId=${payload.orderId}`,
-    `requestId=${payload.requestId}`,
-    `resultCode=${payload.resultCode}`,
-    `transId=${payload.transId}`,
-  ].join('&')
-
-  const expected = crypto.createHmac('sha256', secret).update(raw).digest('hex')
-  const a = Buffer.from(expected, 'utf8')
-  const b = Buffer.from(payload.signature, 'utf8')
-  if (a.length !== b.length) return false        // timingSafeEqual throw nếu khác độ dài
-  return crypto.timingSafeEqual(a, b)
+/** Rút gọn — chuỗi ký thật của MoMo gồm nhiều field hơn theo thứ tự alphabet; xem tài liệu cổng. */
+function verifySignature(p: MomoPayload, secret: string): boolean {
+  const raw = `amount=${p.amount}&orderId=${p.orderId}&requestId=${p.requestId}&resultCode=${p.resultCode}&transId=${p.transId}`
+  const expected = Buffer.from(crypto.createHmac('sha256', secret).update(raw).digest('hex'))
+  const received = Buffer.from(String(p.signature))
+  // So sánh THỜI GIAN HẰNG SỐ: `===` thoát sớm ở byte khác đầu tiên → đo thời gian để đoán dần
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received)
 }
 
 export async function POST(request: Request) {
   const secret = process.env.MOMO_SECRET_KEY
-  if (!secret) {
-    console.error('[webhook:momo] MOMO_SECRET_KEY not configured')
-    return Response.json({ error: 'Not configured' }, { status: 500 })
-  }
+  if (!secret) return Response.json({ error: 'Not configured' }, { status: 500 })
 
   let payload: MomoPayload
   try {
-    payload = (await request.json()) as MomoPayload
+    payload = await request.json()
   } catch {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
   // 1. ⭐ XÁC THỰC TRƯỚC MỌI THỨ KHÁC
-  if (!verifySignature(payload, secret)) {
-    console.warn('[webhook:momo] invalid signature', { orderId: payload.orderId })
-    return Response.json({ error: 'Invalid signature' }, { status: 401 })
-  }
+  if (!verifySignature(payload, secret)) return Response.json({ error: 'Invalid signature' }, { status: 401 })
 
-  // 2. ⭐ IDEMPOTENCY — cổng thanh toán sẽ GỬI LẠI nếu không nhận được 2xx
-  const alreadyProcessed = await hasProcessedTransaction(payload.transId)
-  if (alreadyProcessed) {
-    return Response.json({ received: true })     // 200, không xử lý lại
-  }
+  // 2. ⭐ IDEMPOTENCY — cổng sẽ GỬI LẠI nếu không nhận được 2xx
+  if (await hasProcessedTransaction(payload.transId)) return Response.json({ received: true })
 
-  // 3. Xử lý
+  // 3. Xử lý — các hàm *Transaction / *OrderPayment là giả định, gọi backend Express
   try {
-    if (payload.resultCode === 0) {
-      await confirmOrderPayment(payload.orderId, payload.transId, payload.amount)
-    } else {
-      await failOrderPayment(payload.orderId, payload.resultCode)
-    }
+    if (payload.resultCode === 0) await confirmOrderPayment(payload.orderId, payload.transId, payload.amount)
+    else await failOrderPayment(payload.orderId, payload.resultCode)
     await markTransactionProcessed(payload.transId)
   } catch (e) {
     console.error('[webhook:momo] processing failed', e)
-    // ⭐ Trả 500 để cổng thanh toán THỬ LẠI. Đừng trả 200 khi chưa xử lý xong.
-    return Response.json({ error: 'Processing failed' }, { status: 500 })
+    return Response.json({ error: 'Processing failed' }, { status: 500 })   // ⭐ 500 để cổng THỬ LẠI
   }
 
-  // 4. Invalidate cache để người dùng thấy trạng thái mới
-  revalidatePath('/orders')
-  revalidatePath(`/orders/${payload.orderId}`)
-  revalidateTag('orders')
+  // 4. Next 16: revalidateTag cần tham số thứ hai (cacheLife profile). 'max' = stale-while-revalidate.
+  revalidateTag('orders', 'max')
 
-  // 5. Trả 200 NHANH — cổng thanh toán thường timeout sau 5-10 giây
-  return Response.json({ received: true })
+  // 5. Việc chậm, không ảnh hưởng kết quả → chạy SAU khi response đã gửi
+  after(() => sendPaymentReceiptEmail(payload.orderId))
+
+  return Response.json({ received: true })                 // trả 200 NHANH — cổng timeout sau vài giây
 }
 ```
 
-**Năm nguyên tắc webhook — mỗi cái tương ứng một sự cố production thật:**
-
-| # | Nguyên tắc | Điều gì xảy ra nếu bỏ |
+| # | Nguyên tắc | Bỏ đi thì |
 | --- | --- | --- |
-| 1 | **Xác thực signature TRƯỚC** khi đọc bất kỳ field nào | Bất kỳ ai POST được `{resultCode: 0}` → đơn hàng "đã thanh toán" miễn phí |
+| 1 | **Xác thực signature TRƯỚC** khi tin bất kỳ field nào | Ai cũng POST được `{resultCode: 0}` → đơn "đã thanh toán" miễn phí |
 | 2 | **`timingSafeEqual`**, không `===` | Timing attack đoán được signature |
-| 3 | **Idempotency theo transaction ID** | Cổng gửi lại → cộng tiền hai lần |
-| 4 | **Trả 500 khi xử lý lỗi** | Cổng nghĩ đã xong → không gửi lại → mất giao dịch |
-| 5 | **Trả 200 nhanh, việc chậm để queue** | Timeout → cổng gửi lại → nhân đôi tải |
+| 3 | **Idempotency theo transaction ID** | Cổng gửi lại → xử lý thanh toán hai lần |
+| 4 | **Trả 500 khi xử lý lỗi** | Cổng tưởng đã xong → không gửi lại → mất giao dịch |
+| 5 | **Trả 200 nhanh** | Timeout → cổng gửi lại → nhân đôi tải |
 
-⚠️ **Về nguyên tắc 5:** nếu việc xử lý mất >3 giây (gửi email, gọi nhiều API), hãy **ghi vào queue rồi
-trả 200 ngay**:
+**`after()` vs queue:** `after(cb)` chạy `cb` sau khi response đã gửi, trong cùng lần thực thi (bị giới
+hạn bởi `maxDuration` của platform; vẫn chạy kể cả khi handler throw). Đủ cho việc nhẹ như email, log,
+analytics. Việc **phải** thành công và có thể kéo dài (đối soát, gọi nhiều hệ thống) → ghi vào job queue
+có retry.
 
 ```tsx
-await enqueueJob({ type: 'process-payment', payload })
+// ❌ Chặn response chờ gửi email — cổng có thể timeout và gửi lại
+await sendPaymentReceiptEmail(orderId)
+return Response.json({ received: true })
+
+// ✅ Response đi ngay, email gửi sau
+after(() => sendPaymentReceiptEmail(orderId))
 return Response.json({ received: true })
 ```
 
-Trong repo này, `confirmOrderPayment` gọi backend Express — nhanh. Nhưng nếu sau này thêm gửi email
-hoá đơn, hãy tách ra.
-
-⚠️ **Và một điều nữa: webhook route KHÔNG nằm trong `proxy.ts` matcher.**
-
-📄 `proxy.ts`:
+⚠️ **Webhook route KHÔNG nằm trong `proxy.ts` matcher** — và phải giữ như vậy:
 
 ```tsx
+// proxy.ts
 export const config = {
   matcher: ['/seller/:path*', '/cart/:path*', '/checkout/:path*', '/orders/:path*'],
 }
 ```
 
-`/api/webhooks/momo` không khớp → proxy không chạy. **Đây là điều đúng** (webhook không có cookie
-session, sẽ bị `redirectToLogin`). Nhưng nếu bạn thêm `/api/:path*` vào matcher, webhook sẽ vỡ.
-Hãy nhớ điều này.
+Webhook không có cookie session → nếu proxy chạy sẽ `redirectToLogin`. Thêm `/api/:path*` vào matcher
+là webhook vỡ.
 
 ---
 
 ## 7. Route Handler và Caching
 
-Route handler `GET` **mặc định là dynamic** trong Next.js hiện đại. Muốn cache, phải khai báo:
+`GET` không cache mặc định (mục 2). Opt-in bằng route segment config (repo **chưa** bật
+`cacheComponents`, nên dùng mô hình này):
 
 ```tsx
-// Cache tĩnh, revalidate mỗi giờ
+// app/api/products/featured/route.ts — dữ liệu công khai, cache 1 giờ
+import { apiFetch } from '@/lib/api/server-client'
+import type { ProductListResult } from '@/types/product'
+
 export const revalidate = 3600
 
 export async function GET() {
-  const result = await apiFetch<ProductListResult>('/product?page=1&limit=12', {
-    cache: 'force-cache',
-    tags: ['products'],
-  })
+  const result = await apiFetch<ProductListResult>('/product?page=1&limit=12', { tags: ['products'] })
   return Response.json(result, {
     headers: { 'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=60' },
   })
 }
 ```
 
-**Hai tầng cache khác nhau — đừng nhầm:**
+⚠️ Đọc `request.headers`, `cookies()`, `headers()` trong handler → luôn dynamic, cấu hình cache không có
+tác dụng. Endpoint cache được phải **không phụ thuộc người gọi**.
 
-| Khai báo | Tầng nào | Ai đọc |
+| Khai báo | Tầng | Ai đọc |
 | --- | --- | --- |
-| `export const revalidate = 3600` | **Next.js Full Route Cache** (file `10`) | Next.js server |
-| Header `Cache-Control: s-maxage=3600` | **CDN / browser** | Vercel Edge, Cloudflare, browser |
+| `export const revalidate = 3600` / `dynamic = 'force-static'` | **Next.js** (cache phía server) | Next server |
+| Header `Cache-Control: s-maxage=…` | **CDN / browser** | Vercel, Cloudflare, browser |
 
-Bạn thường muốn **cả hai**. Và `stale-while-revalidate=60` nói với CDN: *"trả bản cũ ngay, đồng thời
-lấy bản mới ở background"* — người dùng không bao giờ chờ.
+Thường bạn muốn **cả hai**. `stale-while-revalidate=60` bảo CDN "trả bản cũ ngay, lấy bản mới ở
+background".
 
-⚠️ **Với dữ liệu riêng tư, luôn `private, no-store`:**
+> Khi bật `cacheComponents`, `GET` handler theo mô hình của page: prerender nếu không đọc dữ liệu
+> runtime, và cache dữ liệu bằng `'use cache'` — nhưng **trong một hàm helper**, không đặt trực tiếp
+> trong thân handler.
 
-```tsx
-headers: { 'Cache-Control': 'private, no-store' }
-```
-
-Thiếu dòng này trên một endpoint trả dữ liệu người dùng là lỗ bảo mật: CDN cache response của người A
-và trả cho người B. **Đây là loại lỗi đã xảy ra ở nhiều công ty lớn.**
+⚠️ **Dữ liệu riêng tư: luôn `Cache-Control: private, no-store`.** CDN cache response của người A rồi trả
+cho người B là loại sự cố đã xảy ra ở nhiều công ty lớn.
 
 ---
 
-## 8. Runtime: Node vs Edge cho Route Handler
+## 8. Runtime: Node vs Edge
 
 ```tsx
 export const runtime = 'nodejs'    // mặc định
 export const runtime = 'edge'      // opt-in
 ```
 
-| | Node runtime | Edge runtime |
+| | Node (mặc định) | Edge |
 | --- | --- | --- |
-| Cold start | ~100-500ms | **~5ms** |
-| Node API (`crypto`, `fs`, `Buffer`) | ✅ | ❌ (chỉ Web Crypto) |
-| Kết nối sống lâu (SSE, streaming dài) | ✅ | ⚠️ Giới hạn thời gian ngắn |
-| Vị trí | Một region | **Gần người dùng** |
-| Thư viện npm nặng | ✅ | ⚠️ Nhiều cái không chạy |
+| Node API (`node:crypto`, `fs`, `Buffer`) | ✅ | ❌ (chỉ Web API, Web Crypto) |
+| Kết nối sống lâu (SSE, export dài) | ✅ | ⚠️ Giới hạn thời gian thực thi |
+| Thư viện npm | ✅ | ⚠️ Nhiều cái không chạy |
+| Cold start / vị trí | Chậm hơn, một region | Nhanh, gần người dùng |
 
-**Chọn theo bảng này:**
+Mọi route handler trong chương này (webhook cần `node:crypto`, SSE, CSV export) đều để **mặc định Node**.
+Edge chỉ đáng khi handler cực nhẹ và cần ở gần người dùng.
 
-| Route handler | Runtime | Vì sao |
-| --- | --- | --- |
-| Webhook MoMo | `nodejs` | Cần `node:crypto` cho `timingSafeEqual` |
-| SSE order stream | `nodejs` | Kết nối sống lâu |
-| CSV export | `nodejs` | Chạy lâu, nhiều request tuần tự |
-| `/api/health` | `edge` | Cực nhanh, không cần gì |
-| Redirect / geo-routing | `edge` | Cần ở gần người dùng |
-
-📄 Nhớ lại file `12`: `proxy.ts` chạy Edge, nên `lib/auth/tokens.ts` phải dùng `atob` thay
-`Buffer.from`. Cùng ràng buộc áp dụng cho route handler chạy `runtime = 'edge'`.
+📄 Lưu ý về `proxy.ts`: từ Next 16, Proxy **mặc định chạy Node.js runtime** và **không** cho đặt
+`runtime` (đặt là lỗi). `lib/auth/tokens.ts` dùng `atob` thay vì `Buffer` là thói quen tốt từ thời
+middleware chạy Edge — vẫn đúng, nhưng không còn là bắt buộc.
 
 ---
 
@@ -776,76 +575,45 @@ export const runtime = 'edge'      // opt-in
 
 | Đừng làm | Vì | Dùng gì |
 | --- | --- | --- |
-| Tạo `/api/products` để trang của mình fetch | Waterfall client→server; mất type safety; thêm code vô ích | Server Component gọi `apiFetch` trực tiếp |
-| Tạo `/api/cart/add` cho form của mình | Server Action làm được, ít code hơn, có progressive enhancement | Server Action |
-| Proxy toàn bộ backend qua `/api/*` | Thêm một chặng latency; trùng lặp routing | Gọi backend trực tiếp từ Server Component |
-| Đặt logic nghiệp vụ trong route handler | Không test được dễ | `lib/` + route handler mỏng |
+| Tạo `/api/products` để trang của mình fetch | Waterfall client→server, mất type safety | Server Component gọi `apiFetch` trực tiếp |
+| Tạo `/api/cart/add` cho form của mình | Server Action làm được, có progressive enhancement | Server Action |
+| Proxy toàn bộ backend qua `/api/*` | Thêm một chặng latency, trùng routing | Gọi backend từ Server Component |
+| Đặt logic nghiệp vụ trong handler | Khó test | `lib/` + handler mỏng |
 
-📄 **Repo này KHÔNG có `route.ts` nào, và đó là điểm mạnh.** Mọi thứ đi qua Server Component +
-Server Action. Chỉ thêm route handler khi có một **client ngoài** (webhook, mobile, streaming) —
-đúng ba ca đã nêu ở chương này.
-
----
-
-## 10. Trade-offs
-
-| Lợi ích | Cái giá |
-| --- | --- |
-| URL ổn định cho client ngoài (webhook, mobile) | Là **endpoint công khai** — phải tự làm authn/authz/validate/rate-limit |
-| Kiểm soát đầy đủ status code và header | Không có type safety end-to-end như Server Action |
-| Streaming response (SSE, chunked, file lớn) | Không đổi được status sau byte đầu tiên |
-| Chọn runtime được (`edge` cho tốc độ) | Phải biết ràng buộc runtime; code có thể phải viết hai kiểu |
-| Trả file với `Content-Disposition` | Dễ quên `Cache-Control: private` → lỗ bảo mật |
-
-| Realtime: lợi ích | Cái giá |
-| --- | --- |
-| Người dùng thấy trạng thái ngay, không F5 | Kết nối sống lâu tốn tài nguyên server |
-| SSE tự reconnect | Giới hạn 6 kết nối/domain trên HTTP/1.1 |
-| `router.refresh()` giữ được state client | Mỗi refresh là một round-trip render server |
-| Polling cực đơn giản | Tốn request; trễ tới `interval` |
+⚖️ **Trade-off:** route handler cho URL ổn định, toàn quyền status/header, streaming — đổi lại nó là
+**endpoint công khai** (tự làm authn/authz/validate/rate-limit), không có type safety end-to-end như
+Server Action, và không đổi được status sau byte đầu tiên. Realtime đổi "không cần F5" lấy kết nối sống
+lâu (SSE) hoặc nhiều request (polling).
 
 ---
 
-## 11. Best Practices
+## 10. Best Practices
 
-1. **Server Action cho UI của mình; Route Handler cho mọi thứ khác gọi vào.** Đừng tạo `/api/*` để
-   chính app của mình dùng.
-
-2. **Xác thực + validate TRƯỚC khi mở stream.** Sau byte đầu tiên bạn không đổi được status.
-
-3. **Route handler cũng là endpoint công khai** — authn, authz, validate input, giống Server Action
-   (file `11`).
-
-4. **`Cache-Control: private, no-store` cho MỌI dữ liệu riêng tư.** Không thương lượng.
-
-5. **Webhook: verify signature bằng `timingSafeEqual`, idempotency theo transaction ID, trả 500 khi
-   lỗi để được gửi lại.**
-
-6. **SSE cần đủ 5 chi tiết:** content-type, `no-cache, no-transform`, `X-Accel-Buffering: no`,
-   keep-alive comment, và `runtime = 'nodejs'`.
-
-7. **Bắt đầu bằng polling.** Nếu `router.refresh()` mỗi 20 giây đủ tốt, đừng làm SSE.
-
-8. **Realtime là trigger, không phải store.** Nhận event → `router.refresh()` → Server Component
-   render lại. Đừng giữ bản sao dữ liệu ở client.
-
-9. **Dừng polling/SSE ở trạng thái terminal** và khi tab ẩn.
-
-10. **Logic nghiệp vụ trong `lib/`, route handler chỉ điều phối** — để test được (file `14`).
+1. **Server Action cho UI của mình; Route Handler cho mọi thứ khác gọi vào.**
+2. **Type context bằng `RouteContext<'/route'>`**; nhớ `await ctx.params`.
+3. **Route handler là endpoint công khai** — authn, authz, validate body (`unknown`) như Server Action (file `11`).
+4. **Xác thực + validate TRƯỚC khi mở stream.** Sau byte đầu tiên không đổi được status.
+5. **Stream phải dừng khi client ngắt** (`request.signal`, `cancel()`).
+6. **`Cache-Control: private, no-store` cho MỌI dữ liệu riêng tư.**
+7. **`GET` mặc định dynamic** — cache là opt-in, và chỉ cho dữ liệu không phụ thuộc người gọi.
+8. **Webhook:** verify signature bằng `timingSafeEqual`, idempotency theo transaction ID, trả 500 khi lỗi,
+   việc chậm đưa vào `after()` hoặc queue.
+9. **Bắt đầu bằng polling.** `router.refresh()` mỗi 20 giây đủ tốt thì đừng làm SSE.
+10. **Realtime là trigger, không phải store:** nhận event → `router.refresh()` → Server Component render lại.
 
 ---
 
 ## Tự kiểm tra
 
-1. Khi nào cần route handler thay vì Server Action? Kể ba ca không thể thay thế.
-2. Vì sao mọi kiểm tra có thể thất bại phải nằm **trước** `new ReadableStream`?
-3. `X-Accel-Buffering: no` giải quyết vấn đề gì? Thiếu nó thì triệu chứng là gì?
-4. Vì sao `OrderStatusLive` `return null` thay vì tự render timeline?
-5. Kể 5 nguyên tắc webhook và sự cố production tương ứng nếu bỏ mỗi cái.
-6. Vì sao `timingSafeEqual` chứ không `===` khi so signature?
-7. Vì sao webhook route **không nên** nằm trong `proxy.ts` matcher?
-8. `export const revalidate` và header `Cache-Control` khác nhau ở tầng nào?
-9. Giới hạn 6 kết nối của SSE ảnh hưởng thế nào? Khi nào nó không còn là vấn đề?
-10. Vì sao repo không có `route.ts` nào lại là điểm mạnh?
+1. Kể ba ca route handler không thể thay bằng Server Action.
+2. `GET` handler ở Next 14 và Next 16 khác nhau thế nào về cache? Làm sao opt-in cache?
+3. `RouteContext<'/api/orders/[id]/stream'>` cho bạn gì so với tự viết kiểu `params`?
+4. Vì sao mọi kiểm tra có thể thất bại phải nằm **trước** `new ReadableStream`?
+5. Điều gì xảy ra nếu SSE handler không lắng nghe `request.signal` / `cancel()`?
+6. `X-Accel-Buffering: no` giải quyết gì? Triệu chứng khi thiếu?
+7. Vì sao `OrderStatusLive` không dùng `useState` và `return null`?
+8. Kể 5 nguyên tắc webhook và sự cố tương ứng nếu bỏ mỗi cái. `after()` khác queue ở đâu?
+9. Vì sao webhook route **không** được nằm trong `proxy.ts` matcher?
+10. `export const revalidate` và header `Cache-Control` khác nhau ở tầng nào?
 
 ➡️ Tiếp theo: `21-typescript-nang-cao-cho-react.md`

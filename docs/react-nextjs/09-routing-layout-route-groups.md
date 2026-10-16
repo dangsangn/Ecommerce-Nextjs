@@ -1,37 +1,33 @@
 # 09. Routing, Layout & Route Groups
 
-> **Mục tiêu:** đọc được cây route của repo này, hiểu route group giải quyết vấn đề gì,
-> biết vì sao `params`/`searchParams` là Promise, và nhận ra các file convention còn thiếu.
+> **Mục tiêu:** đọc được cây route của repo, hiểu route group giải quyết vấn đề gì, biết vì sao
+> `params`/`searchParams` là Promise, và nhận ra các file convention còn thiếu.
 
 ---
 
 ## 1. Overview
 
-### File-system routing: thư mục = URL
-
-Trong App Router, **cấu trúc thư mục quyết định URL**, và **tên file quyết định vai trò**:
+### File-system routing: thư mục = URL, tên file = vai trò
 
 | File | Vai trò | Bọc cái gì |
 | --- | --- | --- |
 | `page.tsx` | UI của route — **bắt buộc để URL truy cập được** | — |
-| `layout.tsx` | Vỏ bọc dùng chung, **giữ state qua các lần navigate** | `page` và các layout con |
-| `template.tsx` | Như layout nhưng **tạo lại** mỗi lần navigate | `page` |
-| `loading.tsx` | Suspense fallback tự động | `page` |
-| `error.tsx` | Error boundary (`'use client'`) | `page` |
-| `not-found.tsx` | UI khi gọi `notFound()` hoặc route không tồn tại | — |
-| `route.ts` | API endpoint (không phải UI) | — |
+| `layout.tsx` | Vỏ dùng chung, **giữ state qua các lần navigate** | `page` và layout con |
+| `template.tsx` | Như layout nhưng **mount lại** mỗi lần navigate | `page` |
+| `loading.tsx` | Suspense fallback tự động | `page` + segment con |
+| `error.tsx` | Error boundary (`'use client'`) | `page` + segment con |
+| `not-found.tsx` | UI khi gọi `notFound()` trong segment; URL không khớp route nào chỉ do **root** `app/not-found.tsx` xử lý | — |
+| `default.tsx` | Fallback cho slot của parallel route | — |
+| `route.ts` | HTTP endpoint (không phải UI) | — |
 
-Và các quy ước đặt tên thư mục:
-
-| Cú pháp | Ý nghĩa | Có trong URL? |
+| Cú pháp thư mục | Ý nghĩa | Có trong URL? |
 | --- | --- | --- |
 | `products` | Segment tĩnh | ✅ `/products` |
-| `[id]` | Segment động | ✅ `/products/abc` → `params.id = 'abc'` |
-| `[...slug]` | Catch-all | ✅ `/a/b/c` → `params.slug = ['a','b','c']` |
-| `[[...slug]]` | Catch-all tuỳ chọn | ✅ khớp cả `/` |
-| `(group)` | **Route group** | ❌ **Không xuất hiện trong URL** |
-| `_folder` | Private folder | ❌ Không tạo route |
-| `@folder` | Named slot (parallel routes) | ❌ |
+| `[id]` | Segment động | ✅ `/products/abc` → `id = 'abc'` |
+| `[...slug]` / `[[...slug]]` | Catch-all / catch-all tuỳ chọn | ✅ `/a/b/c` → `['a','b','c']` |
+| `(group)` | **Route group** | ❌ |
+| `_folder` | Private folder | ❌ không tạo route |
+| `@slot` | Parallel route slot | ❌ — Next 16 **bắt buộc** có `default.tsx` cho mỗi slot, thiếu là build lỗi (file `19`) |
 
 ---
 
@@ -39,414 +35,240 @@ Và các quy ước đặt tên thư mục:
 
 ### 🧠 Layout như những chiếc hộp lồng nhau
 
-Layout **không bị thay thế** khi bạn điều hướng trong phạm vi của nó. Chúng lồng vào nhau, và
-`{children}` là cái lỗ để hộp con lọt vào:
-
 ```
-┌─ app/layout.tsx ────────────────────────────────────────┐
-│  <html> <body> {children} <Toaster/> </body> </html>    │
-│                                                          │
-│  ┌─ app/(seller)/seller/layout.tsx ──────────────────┐  │
-│  │  <aside><SellerSidebar/></aside>                   │  │
-│  │  <SellerMobileNav/>                                │  │
-│  │  <main> {children} </main>                         │  │
-│  │                                                     │  │
-│  │  ┌─ app/(seller)/seller/products/page.tsx ─────┐  │  │
-│  │  │  Danh sách sản phẩm                          │  │  │
-│  │  └──────────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────┘  │
+┌─ app/layout.tsx ─────────────────────────────────────────┐
+│  <html><body> {children} <Toaster/> </body></html>       │
+│  ┌─ app/(seller)/seller/layout.tsx ───────────────────┐  │
+│  │  <aside><SellerSidebar/></aside> <SellerMobileNav/> │  │
+│  │  <main> {children} </main>                          │  │
+│  │  ┌─ app/(seller)/seller/products/page.tsx ──────┐   │  │
+│  │  │  Danh sách sản phẩm                           │   │  │
+│  │  └───────────────────────────────────────────────┘   │  │
+│  └─────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Hệ quả cực kỳ quan trọng của việc "layout không bị thay thế":**
+Điều hướng `/seller/products` → `/seller/discounts`:
 
-Khi bạn điều hướng từ `/seller/products` sang `/seller/discounts`:
+- ✅ `SellerSidebar`, `SellerMobileNav` **không mount lại** — giữ scroll, giữ state `open` của drawer
+- ✅ Server **chỉ render segment thay đổi** (page), layout dùng chung không bị fetch lại
 
-- ✅ `SellerSidebar` **không** re-render → vị trí scroll của nó được giữ
-- ✅ `SellerMobileNav` giữ nguyên state `open` (nếu drawer đang mở)
-- ✅ Không có "nhấp nháy" ở phần vỏ
-- ✅ **Chỉ `page.tsx` được fetch lại** — RSC payload nhỏ hơn nhiều so với tải cả trang
+### 🧠 Route group = "phân loại", không phải "định tuyến"
 
-Đây là lý do App Router cho cảm giác như SPA dù render trên server.
-
-### 🧠 Route group như thư mục để "phân loại", không phải "định tuyến"
-
-`(store)` không tạo ra `/store`. Nó chỉ nói với Next.js: *"nhóm các route này lại để chúng dùng chung
-một layout, nhưng đừng thêm gì vào URL."*
+`(store)` không tạo `/store`. Nó chỉ nói: *"nhóm các route này để dùng chung một layout, đừng thêm gì vào URL."*
 
 ---
 
-## 3. Cây route thật của repo này
+## 3. Cây route thật của repo
 
 ```
 app/
-├── layout.tsx ......................... Root layout (html, body, font, Toaster)
-├── globals.css
-│
-├── (auth)/ ............................ 🔓 Group: trang xác thực
-│   ├── layout.tsx ..................... Căn giữa, card hẹp (max-w-sm)
-│   ├── login/page.tsx ................. → /login
-│   ├── signup/page.tsx ................ → /signup
-│   └── verify-otp/page.tsx ............ → /verify-otp
-│
-├── (store)/ ........................... 🛍️ Group: mặt tiền cửa hàng
-│   ├── layout.tsx ..................... StoreHeader + main + footer
-│   ├── page.tsx ....................... → /            (danh mục sản phẩm)
+├── layout.tsx ......................... Root (html, body, font, Toaster, metadata)
+├── (auth)/ ............................ 🔓 header gọn + card căn giữa (max-w-sm)
+│   ├── login/ signup/ verify-otp/
+│   └── forgot-password/ reset-password/
+├── (store)/ ........................... 🛍️ StoreHeader + main + footer
+│   ├── page.tsx ....................... → /
 │   ├── products/[id]/page.tsx ......... → /products/:id
-│   ├── cart/page.tsx .................. → /cart
-│   ├── checkout/page.tsx .............. → /checkout
-│   ├── orders/page.tsx ................ → /orders
-│   └── orders/[id]/page.tsx ........... → /orders/:id
-│
-└── (seller)/ .......................... 🏪 Group: dashboard người bán
-    └── seller/
-        ├── layout.tsx ................. Sidebar + mobile nav + main
-        ├── page.tsx ................... → /seller
-        ├── account/page.tsx ........... → /seller/account
-        ├── products/
-        │   ├── page.tsx ............... → /seller/products
-        │   ├── new/page.tsx ........... → /seller/products/new
-        │   └── [id]/edit/page.tsx ..... → /seller/products/:id/edit
-        └── discounts/
-            ├── page.tsx ............... → /seller/discounts
-            └── new/page.tsx ........... → /seller/discounts/new
+│   ├── cart/ checkout/ ................ → /cart, /checkout
+│   └── orders/page.tsx, orders/[id]/ .. → /orders, /orders/:id
+└── (seller)/seller/ ................... 🏪 Sidebar + mobile nav
+    ├── page.tsx ....................... → /seller
+    ├── account/ ....................... → /seller/account
+    ├── products/ (page, new/, [id]/edit/)
+    └── discounts/ (page, new/)
 ```
 
-Chú ý cấu trúc `(seller)/seller/` — có **cả** group `(seller)` **và** segment thật `seller`.
-Group không xuất hiện trong URL, nên URL là `/seller`, không phải `/seller/seller`.
+`(seller)/seller/` có **cả** group `(seller)` **và** segment thật `seller` → URL là `/seller`, không phải
+`/seller/seller`.
 
 ---
 
 ## 4. ⭐ Route Group — vấn đề nó giải quyết
 
-### Vấn đề: ba layout khác nhau, một cây URL
+Ba vùng UI khác hẳn nhau:
 
-Repo này có ba vùng UI hoàn toàn khác nhau:
+| Group | 📄 Layout | Vỏ |
+| --- | --- | --- |
+| `(store)` | `app/(store)/layout.tsx` | `<StoreHeader />` (async, đọc cookie) + `<main>` + footer perks |
+| `(seller)` | `app/(seller)/seller/layout.tsx` | `<aside><SellerSidebar/></aside>` + `<SellerMobileNav/>` + `<main>` |
+| `(auth)` | `app/(auth)/layout.tsx` | Header logo + một card căn giữa |
 
-📄 `app/(store)/layout.tsx` — có header và footer:
-
-```tsx
-import { StoreHeader } from '@/components/store/store-header'
-
-export default function StoreLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="min-h-full">
-      <StoreHeader />
-      <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
-      <footer className="border-t">
-        <div className="mx-auto max-w-6xl px-4 py-6 text-sm text-muted-foreground">© Shop</div>
-      </footer>
-    </div>
-  )
-}
-```
-
-📄 `app/(seller)/seller/layout.tsx` — có sidebar, không có header/footer:
+**Không có route group**, cả ba chia sẻ `app/layout.tsx` và bạn phải viết:
 
 ```tsx
-import { SellerSidebar } from '@/components/seller/seller-sidebar'
-import { SellerMobileNav } from '@/components/seller/seller-mobile-nav'
-
-export default function SellerLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-screen">
-      <aside className="hidden w-60 shrink-0 border-r border-sidebar-border bg-sidebar md:block">
-        <SellerSidebar />
-      </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <SellerMobileNav />
-        <main className="flex-1 p-6 md:p-10">{children}</main>
-      </div>
-    </div>
-  )
-}
-```
-
-📄 `app/(auth)/layout.tsx` — không header, không sidebar, chỉ một card căn giữa:
-
-```tsx
-export default function AuthLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex flex-1 items-center justify-center bg-muted/40 px-4 py-12">
-      <div className="w-full max-w-sm">{children}</div>
-    </div>
-  )
-}
-```
-
-**Không có route group, bạn phải làm gì?**
-
-Nếu đặt phẳng `app/login/page.tsx`, `app/cart/page.tsx`, `app/seller/page.tsx` thì cả ba **cùng chia sẻ
-`app/layout.tsx`** — chỉ có một layout cho tất cả. Bạn buộc phải viết logic điều kiện:
-
-```tsx
-// ❌ Cách phải làm nếu không có route group
+// ❌ Layout điều kiện theo pathname
 'use client'   // buộc phải client vì cần usePathname!
 export default function RootLayout({ children }) {
   const pathname = usePathname()
-  const isAuth = pathname.startsWith('/login') || pathname.startsWith('/signup') || pathname.startsWith('/verify-otp')
+  const isAuth = ['/login', '/signup', '/verify-otp'].some((p) => pathname.startsWith(p))
   const isSeller = pathname.startsWith('/seller')
-
   return (
     <html><body>
-      {!isAuth && !isSeller ? <StoreHeader /> : null}
+      {!isAuth && !isSeller ? <StoreHeader /> : null}   {/* async Server Component — KHÔNG dùng được ở đây */}
       {isSeller ? <SellerSidebar /> : null}
-      <main className={isAuth ? 'flex items-center justify-center' : 'mx-auto max-w-6xl'}>
-        {children}
-      </main>
-      {!isAuth && !isSeller ? <Footer /> : null}
+      <main className={isAuth ? 'flex justify-center' : 'mx-auto max-w-7xl'}>{children}</main>
     </body></html>
   )
 }
 ```
 
-Đây là code tệ theo nhiều cách:
-
 | Vấn đề | Hệ quả |
 | --- | --- |
-| Phải là `'use client'` (cần `usePathname`) | **Toàn bộ app** trở thành client tree — mất hết lợi ích RSC |
-| `StoreHeader` là `async` Server Component | **Không dùng được** trong client layout — phải viết lại |
-| Logic route rải trong JSX | Thêm route mới = phải sửa điều kiện ở 4 chỗ, dễ quên |
-| Mọi component của mọi vùng đều được import | Client bundle chứa cả sidebar seller khi người dùng đang ở trang login |
+| `'use client'` ở root | Mất `metadata` export, mọi thứ import từ đây vào bundle |
+| `StoreHeader` là async Server Component | Không render được từ client layout |
+| Logic route rải trong JSX | Thêm route = sửa điều kiện nhiều chỗ, dễ quên (`/forgot-password` đã bị quên ở trên) |
 
-**Route group giải quyết tất cả bằng cách di chuyển thư mục.** Mỗi group có layout riêng, mỗi layout
-là Server Component thuần, và Next.js chọn layout đúng dựa trên đường dẫn file — không cần một dòng
-logic điều kiện nào.
+**Route group giải quyết bằng cách di chuyển thư mục** — mỗi group một layout Server Component, không một
+dòng điều kiện.
 
-### Route group còn dùng để làm gì
-
-| Mục đích | Ví dụ |
-| --- | --- |
-| Layout khác nhau cho từng vùng | Repo này: `(store)`, `(seller)`, `(auth)` |
-| Nhóm route theo team/domain | `(marketing)`, `(dashboard)`, `(admin)` |
-| Tách `loading.tsx`/`error.tsx` theo vùng | `(store)/error.tsx` khác `(seller)/error.tsx` |
-| Nhiều root layout | Đặt `layout.tsx` với `<html>` trong từng group (repo này không dùng) |
-
-### ⚠️ Cạm bẫy: hai group không thể cùng sở hữu một URL
+Công dụng khác: nhóm theo team/domain (`(marketing)`, `(admin)`); `error.tsx`/`loading.tsx` riêng cho
+từng vùng; **nhiều root layout** (mỗi group có `layout.tsx` riêng chứa `<html>` — repo không dùng).
 
 ```
-app/
-├── (store)/page.tsx      → /
-└── (marketing)/page.tsx  → /     ❌ LỖI: hai file cùng resolve về "/"
+// ⚠️ Hai group không được cùng resolve về một URL
+app/(store)/page.tsx      → /
+app/(marketing)/page.tsx  → /     ❌ build lỗi
 ```
-
-Next.js sẽ báo lỗi build. Repo này an toàn vì chỉ `(store)` có `page.tsx` ở cấp gốc của group.
 
 ---
 
-## 5. `params` và `searchParams` là Promise (Next.js 15+)
+## 5. `params` và `searchParams` là Promise
 
-📄 `app/(store)/orders/[id]/page.tsx`:
+📄 `app/(store)/orders/[id]/page.tsx`, `app/(store)/page.tsx`:
 
 ```tsx
-export default async function OrderDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>      // ← Promise, không phải object
-}) {
-  const { id } = await params          // ← phải await
-  let order: Order | null = null
-  let error: string | null = null
-  try {
-    order = await apiFetch<Order>(`/order/${id}`, { auth: true })
-  } catch (e) {
-    error = e instanceof Error ? e.message : 'Could not load this order'
-  }
+export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
   // ...
-```
+}
 
-📄 `app/(store)/page.tsx`:
-
-```tsx
-export default async function StoreHomePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ q?: string; page?: string }>
-}) {
+export default async function StoreHomePage({ searchParams }: { searchParams: Promise<{ q?: string; page?: string }> }) {
   const sp = await searchParams
   const q = (sp.q ?? '').trim()
-  const page = Number(sp.page) > 0 ? Number(sp.page) : 1
+  // ...
+}
 ```
 
-### Vì sao lại là Promise? Đây không phải để cho đẹp.
-
-Nó cho phép Next.js **bắt đầu render phần tĩnh của trang TRƯỚC KHI biết giá trị động**.
-
-Hình dung timeline:
-
-```
-Không có Promise (Next.js 14):
-├─ Chờ có request đầy đủ
-├─ Đọc params
-└─ Render CẢ trang
-   └─ Không thể prerender bất cứ gì nếu trang dùng params
-
-Có Promise (Next.js 15+):
-├─ Bắt đầu render ngay
-├─ Render mọi phần KHÔNG cần params (header, nav, skeleton, layout)
-├─ Gặp `await params` → tạm dừng đúng chỗ đó
-└─ Params sẵn sàng → tiếp tục phần còn lại
-```
-
-Đây chính là ý tưởng đằng sau **Partial Prerendering**: một trang có thể vừa có phần tĩnh (prerender
-tại build time, phục vụ từ CDN) vừa có phần động (render mỗi request), và ranh giới là chỗ bạn `await`.
-
-> **Cách nghĩ đúng:** `params` là Promise vì việc **biết URL** là một "hoạt động động".
-> Cũng như `cookies()` và `headers()` là async, vì lý do y hệt.
-
-### Sai lầm nên tránh: `await` quá sớm
+**Next 15** đổi sang Promise nhưng vẫn cho truy cập đồng bộ (kèm cảnh báo). **Next 16 bỏ hẳn truy cập đồng
+bộ** — `params.id` không `await` là lỗi. Áp dụng cho `params` của `page`, `layout`, `route`, `default` và
+image route (`opengraph-image`, `icon`...); `searchParams` (chỉ `page` có — layout/route không nhận);
+cùng với `cookies()`, `headers()`, `draftMode()`. `generateMetadata` nhận cùng `params`/`searchParams` Promise.
 
 ```tsx
-// ❌ Chặn ngay dòng đầu → không prerender được gì
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
-  return (
-    <div>
-      <ExpensiveStaticHeader />       {/* phải chờ params dù không cần nó */}
-      <Detail id={id} />
-    </div>
-  )
+// ❌ Next 16: lỗi
+export default function Page({ params }: { params: { id: string } }) {
+  return <Detail id={params.id} />
 }
 
-// ✅ Truyền Promise xuống, await ở đúng chỗ cần
-export default function Page({ params }: { params: Promise<{ id: string }> }) {
+// ✅ Helper global `PageProps` do `next dev` / `next build` / `next typegen` sinh ra
+export default async function Page(props: PageProps<'/products/[id]'>) {
+  const { id } = await props.params
+  return <Detail id={id} />
+}
+
+// ✅ `LayoutProps` — params + slot (@modal...) có kiểu, suy ra từ cây thư mục; không cần import
+export default async function ProductLayout(props: LayoutProps<'/products/[id]'>) {
+  const { id } = await props.params
+  return <section data-product={id}>{props.children}</section>
+}
+```
+
+Route literal là **URL**, không chứa route group: `PageProps<'/products/[id]'>`, không phải
+`'/(store)/products/[id]'`. Thêm route mới mà type báo lỗi → chạy lại `next dev`/`next typegen`.
+
+### Vì sao là Promise?
+
+Biết URL/request là **thông tin chỉ có lúc request**. Biến nó thành Promise cho framework render được
+mọi thứ **không** phụ thuộc vào nó trước, và chỉ dừng ở đúng chỗ `await`.
+
+⚠️ Lợi ích này chỉ hiện thực khi có **Partial Prerendering = `cacheComponents: true`** (file `10` §9). Repo
+đang ở mô hình cũ: route nào đọc request data thì **cả route** dynamic, nên `await` ở đầu page không làm
+mất gì đo được. Dưới Cache Components, pattern đúng là:
+
+```tsx
+// ✅ Truyền Promise xuống, await bên trong Suspense — phần còn lại vào static shell
+export default function Page({ params }: PageProps<'/orders/[id]'>) {
   return (
-    <div>
-      <ExpensiveStaticHeader />        {/* render ngay, không chờ */}
-      <Suspense fallback={<DetailSkeleton />}>
-        <Detail params={params} />     {/* chỉ phần này chờ params */}
+    <>
+      <OrderPageHeader />                         {/* static shell */}
+      <Suspense fallback={<OrderSkeleton />}>
+        <OrderDetail params={params} />           {/* chỉ phần này chờ request */}
       </Suspense>
-    </div>
+    </>
   )
 }
 
-async function Detail({ params }: { params: Promise<{ id: string }> }) {
+async function OrderDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const order = await apiFetch<Order>(`/order/${id}`, { auth: true })
   return <OrderView order={order} />
 }
 ```
 
-Với repo này, các trang khá nhẹ nên `await` ở đầu không gây vấn đề đo được. Nhưng đây là pattern
-đáng biết khi trang có phần tĩnh nặng.
+### 📄 Ba cách xử lý `searchParams` trong repo
 
-### 📄 Ba cách xử lý searchParams trong repo
-
-**(a) Tab — validate chặt (`products/page.tsx`):**
+**(a) Whitelist** — `app/(seller)/seller/products/page.tsx`:
 
 ```tsx
-const sp = await searchParams
 const tab = sp.tab === 'published' ? 'published' : 'draft'
 const page = Number(sp.page) > 0 ? Number(sp.page) : 1
 ```
 
-Dùng whitelist: chỉ `'published'` được nhận, mọi giá trị khác về `'draft'`. Đây là cách xử lý input
-không tin cậy đúng đắn — người dùng có thể gõ `?tab=<script>` vào URL.
+Mọi giá trị lạ (`?tab=<script>`) về `'draft'`.
 
-**(b) Search query — trim (`page.tsx`):**
-
-```tsx
-const q = (sp.q ?? '').trim()
-```
-
-Rồi được encode ở `lib/products/catalog-query.ts`:
+**(b) Trim + encode** — `app/(store)/page.tsx` → `lib/products/catalog-query.ts`:
 
 ```tsx
 if (trimmed) s += `&keySearch=${encodeURIComponent(trimmed)}`
 ```
 
-`encodeURIComponent` là bắt buộc — nếu không, người dùng gõ `áo&limit=99999` sẽ inject thêm tham số
-vào request tới backend.
+Không encode thì `áo&limit=99999` inject thêm tham số vào request tới backend.
 
-**(c) Redirect target — có fallback (`login/page.tsx`):**
+**(c) Redirect target** — `app/(auth)/login/page.tsx`:
 
 ```tsx
-export default async function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ redirect?: string }>
-}) {
-  const { redirect } = await searchParams
-  return <LoginForm redirectTo={redirect || '/seller'} />
-}
+const { redirect, reset } = await searchParams
+return <LoginForm redirectTo={redirect || '/seller'} justReset={reset === '1'} />
 ```
 
-⚠️ **Đây là chỗ có rủi ro bảo mật thật: open redirect.**
-
-`redirect` đi từ URL → prop → hidden input → Server Action:
-
-📄 `actions/auth.actions.ts`:
+⚠️ **Lỗ open redirect thật.** `redirect` đi URL → prop → hidden input → 📄 `actions/auth.actions.ts`:
 
 ```tsx
-export async function loginAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  const parsed = loginSchema.safeParse(Object.fromEntries(formData))
-  if (!parsed.success) return { ok: false, message: parsed.error.issues[0].message }
-  const redirectTo = (formData.get('redirect') as string) || '/'
-  try {
-    const data = await apiFetch<LoginData>('/auth/login', { body: parsed.data })
-    await setSession(data.tokens, data.user._id)
-  } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not sign you in') }
-  }
-  redirect(redirectTo)      // ← redirect tới giá trị người dùng kiểm soát
-}
+const redirectTo = (formData.get('redirect') as string) || '/'
+// ... đăng nhập
+redirect(redirectTo)      // ← giá trị người dùng kiểm soát
 ```
 
-Kịch bản tấn công: gửi link `/login?redirect=https://evil.example/phish` cho nạn nhân. Họ đăng nhập
-thật (trên domain thật, thấy URL đúng, thanh địa chỉ hợp lệ), rồi bị đẩy sang trang lừa đảo giống hệt
-để "nhập lại mật khẩu".
-
-**Cách sửa: chỉ cho phép đường dẫn nội bộ.**
+Gửi nạn nhân `/login?redirect=https://evil.example/phish` → họ đăng nhập thật trên domain thật → bị đẩy
+sang trang giả "nhập lại mật khẩu". (Server Action `redirect()` tới URL tuyệt đối sẽ thành hard navigation
+sang domain đó.)
 
 ```tsx
-// lib/auth/safe-redirect.ts
-/**
- * Chỉ nhận đường dẫn tương đối trong cùng site.
- * Chặn URL tuyệt đối (`https://…`) và protocol-relative (`//evil.com`).
- */
+// lib/auth/safe-redirect.ts — chỉ nhận đường dẫn nội bộ
 export function safeRedirect(target: unknown, fallback = '/'): string {
   if (typeof target !== 'string') return fallback
-  if (!target.startsWith('/')) return fallback     // chặn http://, https://, javascript:
-  if (target.startsWith('//')) return fallback     // chặn //evil.com
-  if (target.includes('\\')) return fallback       // chặn /\evil.com (một số browser coi là //)
+  if (!target.startsWith('/')) return fallback     // http:, https:, javascript:
+  if (target.startsWith('//')) return fallback     // //evil.com
+  if (target.includes('\\')) return fallback       // /\evil.com (một số browser hiểu là //)
   return target
 }
-```
 
-```tsx
 // actions/auth.actions.ts
-import { safeRedirect } from '@/lib/auth/safe-redirect'
-// ...
 const redirectTo = safeRedirect(formData.get('redirect'), '/')
-// ...
-redirect(redirectTo)
 ```
 
-Và vì `safeRedirect` là hàm pure, nó test được ngay — khớp với pattern `lib/` của repo:
+Hàm pure → test ngay bằng Vitest (`lib/auth/__tests__/`):
 
 ```tsx
-// lib/auth/__tests__/safe-redirect.test.ts
-import { describe, it, expect } from 'vitest'
-import { safeRedirect } from '@/lib/auth/safe-redirect'
-
-describe('safeRedirect', () => {
-  it('cho phép đường dẫn nội bộ', () => {
-    expect(safeRedirect('/seller/products')).toBe('/seller/products')
-  })
-  it('chặn URL tuyệt đối', () => {
-    expect(safeRedirect('https://evil.example')).toBe('/')
-  })
-  it('chặn protocol-relative', () => {
-    expect(safeRedirect('//evil.example')).toBe('/')
-  })
-  it('chặn giá trị không phải string', () => {
-    expect(safeRedirect(null)).toBe('/')
-  })
+it('chặn URL tuyệt đối và protocol-relative', () => {
+  expect(safeRedirect('https://evil.example')).toBe('/')
+  expect(safeRedirect('//evil.example')).toBe('/')
+  expect(safeRedirect('/seller/products')).toBe('/seller/products')
 })
 ```
 
-> **Nguyên tắc:** mọi giá trị từ `searchParams` là **input của người dùng**. Xử lý nó với cùng mức
-> nghi ngờ như bạn xử lý body của một request POST.
+> **Nguyên tắc:** mọi giá trị từ `searchParams` là **input người dùng** — nghi ngờ như body của POST.
 
 ---
 
@@ -454,324 +276,211 @@ describe('safeRedirect', () => {
 
 ### Giới hạn 1: Layout KHÔNG nhận `searchParams`
 
-Layout chỉ nhận `children` và `params` (nếu ở trong segment động). **Không có `searchParams`.**
+Layout nhận `children` và `params`, **không có `searchParams`** — nếu có, nó phải render lại mỗi khi query
+đổi, mất lợi ích "layout không mount lại".
 
-Đây là quyết định thiết kế có chủ đích: nếu layout nhận `searchParams`, nó sẽ phải re-render mỗi khi
-query string đổi — và bạn mất toàn bộ lợi ích "layout không bị thay thế" ở mục 2.
+📄 Hệ quả trong repo (bug `SearchBox` ở file `02`): `app/(store)/layout.tsx` render `<StoreHeader />` mà
+**không thể** truyền `q`. Cách xử lý: component cần query thì là Client Component dùng `useSearchParams()`
+(bọc `<Suspense>`), hoặc lấy từ `page.tsx`.
 
-📄 Đây là nguyên nhân của bug `SearchBox` đã nói ở file `02`:
+### Giới hạn 2: Layout không render lại khi navigate trong phạm vi của nó
 
-```tsx
-// app/(store)/layout.tsx
-<StoreHeader />        {/* không thể truyền q — layout không có searchParams */}
-```
+Thường là ưu điểm, nhưng dữ liệu hiển thị ở layout có thể cũ. Ví dụ: 📄 `StoreHeader` hiển thị badge giỏ
+hàng; `addToCartAction` (📄 `actions/cart.actions.ts`) chỉ gọi `revalidatePath('/cart')` trong khi người
+dùng đang ở `/products/:id`.
 
-**Cách xử lý:** component nào cần `searchParams` thì phải là Client Component dùng `useSearchParams()`
-(và được bọc `<Suspense>`), hoặc nhận giá trị từ `page.tsx` thay vì từ layout.
-
-### Giới hạn 2: Layout không re-render khi navigate trong phạm vi của nó
-
-Đây thường là **ưu điểm** (giữ scroll, giữ state), nhưng đôi khi là bẫy:
-
-📄 `components/store/store-header.tsx` fetch số lượng giỏ hàng:
+Ở Next 16.2 badge **vẫn cập nhật** — vì bất kỳ revalidation nào trong Server Action đều khiến server render
+lại **trang hiện tại từ root** (gồm cả layout) và gửi kèm response (chi tiết + trích source: file `10` §4–5).
+Nhưng đó là hành vi tạm thời được ghi TODO trong source; đừng dựa vào nó. Nói đúng ý:
 
 ```tsx
-const cart = await apiFetch<Cart>('/cart', { auth: true })
-cartCount = cart.cart_count_product ?? 0
-```
-
-Người dùng ở `/products/abc`, bấm "Add to cart". `addToCartAction` gọi:
-
-📄 `actions/cart.actions.ts`:
-
-```tsx
+// ❌ ngầm dựa vào "revalidate gì cũng render lại trang hiện tại"
 revalidatePath('/cart')
-return { ok: true, message: 'Added to cart' }
-```
 
-Nó revalidate `/cart` — nhưng **`StoreHeader` nằm trong layout của `(store)`**, không phải trong
-`/cart`. Badge số lượng **không cập nhật** cho tới khi người dùng navigate hoặc refresh.
+// ✅ (a) dữ liệu no-store: làm mới trang đang đứng, gồm layout
+import { refresh } from 'next/cache'
+refresh()
 
-**Ba cách sửa, theo mức độ:**
-
-```tsx
-// (a) Revalidate cả layout — đơn giản nhất, nhưng invalidate hết cache của (store)
+// ✅ (b) búa lớn: invalidate layout (store) và mọi trang bên dưới
 revalidatePath('/', 'layout')
 
-// (b) Dùng tag — chính xác hơn (chi tiết ở file 10)
-// trong apiFetch: { tags: ['cart'] }
-revalidateTag('cart')
-
-// (c) Optimistic ở client — phản hồi tức thì, nhưng cần Context (xem file 07 mục cuối)
+// ✅ (c) phản hồi tức thì: optimistic badge qua Context client (file 07)
 ```
 
-> **Bài học:** layout được cache riêng khỏi page. Nếu một Server Action đổi dữ liệu mà layout hiển
-> thị, bạn phải revalidate **cả layout đó**, không chỉ page.
-
-### `template.tsx` — khi bạn *muốn* remount
-
-Nếu bạn cần layout **được tạo lại** mỗi lần navigate (để reset state, chạy lại animation vào trang,
-hoặc log page view), dùng `template.tsx` thay vì `layout.tsx`:
+### `template.tsx` — khi bạn *muốn* mount lại
 
 ```tsx
-// app/(store)/template.tsx
+// app/(store)/template.tsx — mỗi lần navigate tạo <div> mới → animation chạy lại, state con reset
 export default function StoreTemplate({ children }: { children: React.ReactNode }) {
   return <div className="animate-in fade-in duration-200">{children}</div>
 }
 ```
 
-Mỗi lần navigate → `<div>` mới → animation chạy lại. Với `layout.tsx`, nó chỉ chạy một lần.
+Dùng để chạy lại animation vào trang, reset form, hoặc effect "page view" theo từng lần điều hướng.
 
 ---
 
 ## 7. ⚠️ Các convention còn thiếu trong repo
 
-Repo hiện chỉ có `page.tsx` và `layout.tsx`. Đây là những gì còn thiếu và ảnh hưởng cụ thể:
+Repo chỉ có `page.tsx` và `layout.tsx`.
 
 ### `not-found.tsx` + `notFound()` — vấn đề SEO thật
 
-📄 Cách repo đang xử lý sản phẩm không tồn tại — `app/(store)/products/[id]/page.tsx`:
+📄 `app/(store)/products/[id]/page.tsx` hiện render lỗi inline:
 
 ```tsx
-if (error || !product) {
+if (error || !detail) {
   return (
     <div className="space-y-4">
-      <Link href="/" className="text-sm text-primary hover:underline">← Back to store</Link>
+      <Link href="/">← Back to store</Link>
       <p className="text-sm text-destructive">{error ?? 'Product not found'}</p>
     </div>
   )
 }
 ```
 
-**Vấn đề: HTTP status code là `200 OK`.**
-
-Hệ quả cụ thể:
-
-| Ai bị ảnh hưởng | Hậu quả |
-| --- | --- |
-| Google | Index trang "Product not found" như một trang hợp lệ → soft 404, ảnh hưởng crawl budget |
-| Monitoring/analytics | Không đếm được số lỗi 404 → không biết có link chết |
-| CDN | Cache trang lỗi như trang bình thường |
-| Client fetch | `res.ok === true` dù không có dữ liệu |
-
-**Cách sửa:**
+→ **HTTP 200**. Google index "Product not found" như trang hợp lệ (soft 404), monitoring không đếm được
+link chết, CDN cache trang lỗi như trang thường.
 
 ```tsx
-// app/(store)/products/[id]/page.tsx
+// ✅ app/(store)/products/[id]/page.tsx
 import { notFound } from 'next/navigation'
 import { ApiError } from '@/lib/api/http'
 
-export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
-  let product: Product
-  try {
-    product = await apiFetch<Product>(`/product/${id}`)
-  } catch (e) {
-    // 404 từ backend → 404 thật của Next.js
-    if (e instanceof ApiError && e.status === 404) notFound()
-    // Lỗi khác (500, network) → để error.tsx bắt
-    throw e
-  }
-  // Từ đây `product` chắc chắn tồn tại — TypeScript cũng biết, không cần `product!`
+let detail: ProductDetail
+try {
+  detail = normalizeProductDetail(await apiFetch<unknown>(`/product/${id}`))
+} catch (e) {
+  if (e instanceof ApiError && e.status === 404) notFound()   // 404 thật
+  throw e                                                       // 500/network → error.tsx
+}
+// từ đây `detail` chắc chắn có — notFound() trả về `never`, TS tự narrow
 ```
 
 ```tsx
 // app/(store)/not-found.tsx
-import Link from 'next/link'
-
 export default function StoreNotFound() {
   return (
     <div className="space-y-4 py-12 text-center">
       <h2 className="text-xl font-semibold">Không tìm thấy trang</h2>
-      <p className="text-sm text-muted-foreground">
-        Nội dung bạn tìm không tồn tại hoặc đã bị xoá.
-      </p>
       <Link href="/" className="text-sm text-primary hover:underline">← Về trang chủ</Link>
     </div>
   )
 }
 ```
 
-**Lợi ích phụ đáng chú ý:** `notFound()` **throw** (giống `redirect()`), nên TypeScript hiểu rằng
-sau dòng đó `product` không thể là `null`. Điều này loại bỏ toàn bộ các dấu `!` trong file hiện tại:
+⚠️ Status 404 chỉ có khi `notFound()` chạy **trước** khi stream bắt đầu. Nếu segment có `loading.tsx`
+(hoặc `notFound()` nằm trong một `<Suspense>`), header 200 đã gửi; Next chèn `<meta name="robots"
+content="noindex">` thay thế. Thêm `loading.tsx` cho `products/[id]` (file `06`) là đánh đổi điều này.
 
-```tsx
-// Trước — cần `product!` vì TS không biết product đã được kiểm tra
-<img key={img.public_id} src={img.url} alt={product!.product_name} ... />
+### `loading.tsx`, `error.tsx`, `global-error.tsx`
 
-// Sau — TS biết product: Product, không phải Product | null
-<img key={img.public_id} src={img.url} alt={product.product_name} ... />
-```
-
-### `loading.tsx` và `error.tsx`
-
-Đã trình bày chi tiết ở file `06`. Ưu tiên cao nhất: `orders/`, `orders/[id]/`, `products/[id]/`,
-`seller/products/`.
-
-### Cấu trúc đầy đủ nên có
+Chi tiết ở file `06` và `16`. Cấu trúc nên có:
 
 ```
 app/
-├── layout.tsx
-├── global-error.tsx                  ← MỚI: lỗi ở root layout
+├── global-error.tsx              ← lỗi ở root layout
+├── not-found.tsx                 ← URL không khớp route nào (group not-found không bắt được)
 ├── (store)/
-│   ├── layout.tsx
-│   ├── error.tsx                     ← MỚI
-│   ├── not-found.tsx                 ← MỚI
-│   ├── loading.tsx                   ← MỚI
-│   ├── page.tsx
-│   ├── products/[id]/
-│   │   ├── page.tsx
-│   │   └── loading.tsx               ← MỚI (2 request tuần tự — chậm nhất)
-│   └── orders/
-│       ├── page.tsx
-│       ├── loading.tsx               ← MỚI
-│       └── [id]/
-│           ├── page.tsx
-│           └── loading.tsx           ← MỚI
+│   ├── error.tsx, not-found.tsx
+│   ├── products/[id]/loading.tsx
+│   └── orders/loading.tsx, orders/[id]/loading.tsx
 └── (seller)/seller/
-    ├── layout.tsx
-    ├── error.tsx                     ← MỚI
-    ├── loading.tsx                   ← MỚI
-    └── products/
-        ├── page.tsx
-        └── loading.tsx               ← MỚI (có phân trang)
+    ├── error.tsx
+    └── products/loading.tsx
 ```
 
 ---
 
 ## 8. Điều hướng: `<Link>` vs `router.push` vs `redirect()`
 
-Repo dùng cả ba, mỗi cái đúng chỗ:
-
 | Cách | Chạy ở | Dùng khi | Ví dụ trong repo |
 | --- | --- | --- | --- |
-| `<Link href>` | Server hoặc client | Điều hướng người dùng chủ động bấm | `product-card.tsx`, `product-grid.tsx`, `seller-sidebar.tsx` |
-| `router.push()` | Client | Điều hướng sau logic ở client | `search-box.tsx` |
-| `router.replace()` | Client | Đổi URL **không** thêm vào history | `welcome-toast.tsx` (xoá `?welcome=1`) |
-| `redirect()` | Server | Sau khi Server Action thành công | `auth.actions.ts`, `product.actions.ts`, `order.actions.ts` |
+| `<Link href>` | Server hoặc client | Người dùng bấm | `product-card.tsx`, `product-grid.tsx`, `seller-sidebar.tsx` |
+| `router.push()` | Client | Điều hướng sau logic client | `search-box.tsx` |
+| `router.replace()` | Client | Đổi URL **không** thêm history | `welcome-toast.tsx` (xoá `?welcome=1`) |
+| `redirect()` | Server | Sau Server Action / trong Server Component | `auth.actions.ts`, `user.actions.ts`, `order.actions.ts` |
 
-### `<Link>` và prefetching
+### `<Link>` và prefetching (chỉ ở production)
 
-`<Link>` không chỉ là `<a>`. Nó **prefetch** route đích khi link xuất hiện trong viewport (production build):
+| Route đích | `prefetch` mặc định (`"auto"`) |
+| --- | --- |
+| Static | Prefetch **toàn bộ** route + dữ liệu |
+| Dynamic | Chỉ prefetch tới **`loading.tsx` gần nhất** — không có `loading.tsx` thì gần như không có gì để dùng ngay |
 
-```tsx
-<Link href={`/products/${product._id}`} className="group flex flex-col ...">
-```
+📄 `components/store/product-card.tsx` bọc cả card trong `<Link>` tới `/products/:id` — một route
+**dynamic** không có `loading.tsx`. Nên cuộn qua grid **không** tải sẵn trang chi tiết; bấm vào vẫn phải chờ
+server render. Thêm `products/[id]/loading.tsx` → skeleton được prefetch, bấm là thấy ngay. (`prefetch={true}`
+ép prefetch toàn bộ, kể cả dynamic — tốn băng thông, cân nhắc với grid 12 sản phẩm.)
 
-📄 `components/store/product-card.tsx` — cả card là một `<Link>`. Khi người dùng cuộn qua grid sản
-phẩm, Next.js đã tải sẵn RSC payload của các trang chi tiết. Bấm vào → gần như tức thì.
+`router.push` không prefetch và cần `'use client'` → chỉ dùng khi điều hướng phụ thuộc logic (như
+`search-box.tsx` đọc `formData`).
 
-Đây là lý do `router.push` **không nên** là mặc định: nó không có prefetch, và nó cần
-`'use client'`. Chỉ dùng nó khi điều hướng phụ thuộc logic (như `search-box.tsx` cần đọc `formData`).
+### `redirect()` throw — đừng gọi trong `try/catch`
 
-### `redirect()` — chi tiết dễ sai
-
-📄 `actions/user.actions.ts` có một comment rất quan trọng:
-
-```tsx
-try {
-  const data = await apiFetch<UpgradeData>('/user/me/upgrade-to-shop', { auth: true, body: parsed.data })
-  await setSession(data.tokens, clientId)
-} catch (e) {
-  return { ok: false, message: errorMessage(e, 'Could not upgrade to a shop') }
-}
-
-revalidatePath('/seller/account')
-// Send the new seller straight to their dashboard. `?welcome=1` triggers the
-// success toast there (the form unmounts on redirect, so it can't toast itself).
-// Must run OUTSIDE the try/catch above — redirect() throws NEXT_REDIRECT.
-redirect('/seller?welcome=1')
-```
-
-**`redirect()` hoạt động bằng cách THROW một exception đặc biệt** (`NEXT_REDIRECT`). Next.js bắt
-exception đó ở tầng framework và biến thành HTTP redirect.
-
-Nghĩa là nếu bạn gọi `redirect()` **trong** `try/catch`:
+`redirect()` (và `notFound()`) hoạt động bằng cách **throw** một lỗi đặc biệt (`NEXT_REDIRECT`) mà framework bắt.
 
 ```tsx
-// ❌ BUG: catch bắt luôn NEXT_REDIRECT → redirect không xảy ra
+// ❌ catch nuốt luôn NEXT_REDIRECT → đăng nhập thành công nhưng thấy lỗi, không chuyển trang
 try {
   await apiFetch('/auth/login', { body: parsed.data })
-  redirect('/seller')            // throw NEXT_REDIRECT
+  redirect('/seller')
 } catch (e) {
-  return { ok: false, message: 'Could not sign you in' }   // ← bắt cả redirect!
+  return { ok: false, message: 'Could not sign you in' }
 }
-```
 
-Người dùng đăng nhập **thành công** nhưng thấy thông báo lỗi và không được chuyển trang. Đây là bug
-cực khó chẩn đoán, vì mọi thứ khác đều đúng.
-
-📄 Repo tuân thủ đúng ở mọi action. `auth.actions.ts`:
-
-```tsx
+// ✅ Repo làm đúng — 📄 actions/auth.actions.ts, actions/user.actions.ts
 try {
   const data = await apiFetch<LoginData>('/auth/login', { body: parsed.data })
   await setSession(data.tokens, data.user._id)
 } catch (e) {
   return { ok: false, message: errorMessage(e, 'Could not sign you in') }
 }
-redirect(redirectTo)        // ← NGOÀI try/catch ✅
+redirect(redirectTo)        // NGOÀI try/catch
 ```
 
-> **Quy tắc:** `redirect()` và `notFound()` luôn gọi **ngoài** `try/catch`.
-> Nếu buộc phải gọi trong try, hãy re-throw: `if (isRedirectError(e)) throw e`.
+Nếu buộc phải gọi trong `try`, re-throw lỗi của framework bằng `unstable_rethrow` (`next/navigation`):
+
+```tsx
+} catch (e) {
+  unstable_rethrow(e)        // ném lại NEXT_REDIRECT / notFound / lỗi dynamic của Next
+  return { ok: false, message: 'Could not sign you in' }
+}
+```
+
+📄 `actions/user.actions.ts` có comment mẫu: *"Must run OUTSIDE the try/catch above — redirect() throws NEXT_REDIRECT."*
 
 ---
 
 ## 9. Metadata
 
-📄 `app/layout.tsx`:
+📄 `app/layout.tsx` — metadata **duy nhất** của repo:
 
 ```tsx
-export const metadata: Metadata = {
-  title: "E-Commerce Seller",
-  description: "Seller dashboard",
-};
+export const metadata: Metadata = { title: "E-Commerce Seller", description: "Seller dashboard" }
 ```
 
-⚠️ **Đây là metadata duy nhất trong repo** — và nó có hai vấn đề:
-
-1. **Nội dung không khớp.** Toàn bộ storefront (`/`, `/products/:id`, `/cart`, `/orders`) cũng dùng
-   title "E-Commerce Seller" và description "Seller dashboard". Với một trang sản phẩm public, đây
-   là title sai hoàn toàn cho SEO và cho tab browser.
-
-2. **Không có metadata động.** Trang sản phẩm nên có title là tên sản phẩm.
-
-**Cách sửa — metadata tĩnh cho từng group:**
+Cả storefront public (`/`, `/products/:id`) mang title "E-Commerce Seller" — sai cho SEO và tab browser;
+trang sản phẩm không có title động.
 
 ```tsx
-// app/(store)/layout.tsx
+// app/(store)/layout.tsx — metadata theo group + template
 export const metadata: Metadata = {
   title: { default: 'SHOP', template: '%s | SHOP' },
-  description: 'Mua sắm trực tuyến với hàng nghìn sản phẩm.',
+  description: 'Mua sắm trực tuyến từ các shop uy tín.',
 }
 ```
 
-`template: '%s | SHOP'` nghĩa là mọi page con chỉ cần khai báo phần riêng, Next.js tự nối:
-`generateMetadata` trả `'Áo thun trắng'` → title thật là `'Áo thun trắng | SHOP'`.
-
-**Metadata động cho trang sản phẩm:**
-
 ```tsx
-// app/(store)/products/[id]/page.tsx
-import type { Metadata } from 'next'
-
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ id: string }>
-}): Promise<Metadata> {
+// app/(store)/products/[id]/page.tsx — metadata động
+export async function generateMetadata({ params }: PageProps<'/products/[id]'>): Promise<Metadata> {
   const { id } = await params
   try {
-    const product = await apiFetch<Product>(`/product/${id}`)
+    const { spu } = normalizeProductDetail(await apiFetch<unknown>(`/product/${id}`))
     return {
-      title: product.product_name,
-      description: product.product_description ?? `${product.product_name} — ${product.product_type}`,
-      openGraph: {
-        title: product.product_name,
-        images: product.product_thumb ? [{ url: product.product_thumb }] : [],
-      },
+      title: spu.product_name,                       // → "Áo thun trắng | SHOP"
+      description: spu.product_description ?? spu.product_name,
+      openGraph: { images: spu.product_thumb ? [{ url: spu.product_thumb }] : [] },
     }
   } catch {
     return { title: 'Không tìm thấy sản phẩm' }
@@ -779,66 +488,52 @@ export async function generateMetadata({
 }
 ```
 
-**Câu hỏi quan trọng: `generateMetadata` và `page` cùng fetch `/product/${id}` — có gọi API hai lần?**
+**`generateMetadata` và page cùng fetch `/product/${id}` — gọi API hai lần?** Không: Next memoize `fetch`
+GET cùng URL + options trong một request, kể cả `no-store` (file `10` §6).
 
-**Không.** Next.js **memoize** các `fetch` giống nhau trong cùng một request. Cả hai chia sẻ một
-response. Đây chính là cơ chế mà file `10` sẽ giải thích chi tiết.
+**Streaming metadata:** với trang dynamic, Next gửi UI trước và chèn thẻ metadata khi `generateMetadata`
+xong — `generateMetadata` chậm không chặn TTFB. Riêng bot không chạy JS (ví dụ `facebookexternalhit`,
+cấu hình bằng `htmlLimitedBots`) vẫn được chờ để có thẻ trong `<head>`.
 
-Nhưng có một điều kiện: `apiFetch` hiện đặt `cache: 'no-store'` mặc định — điều này ảnh hưởng tới
-memoization. Xem file `10-data-fetching-caching.md` để hiểu chính xác cái gì được dedupe và cái gì không.
-
-**Thêm `metadataBase` cho Open Graph:**
-
-```tsx
-// app/layout.tsx
-export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
-  // ...
-}
-```
-
-Không có nó, các URL tương đối trong `openGraph.images` sẽ không hợp lệ khi share link.
+Thêm `metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000')` ở root layout để
+URL tương đối trong `openGraph.images` thành URL tuyệt đối khi share link.
 
 ---
 
 ## 10. Trade-offs
 
-| Lợi ích của App Router | Cái giá |
+| Lợi ích | Cái giá |
 | --- | --- |
-| Layout lồng nhau giữ state, chỉ page được fetch lại | Layout không nhận `searchParams` và không re-render → dễ có dữ liệu cũ (bug badge giỏ hàng) |
-| Route group tách layout mà không đổi URL | Thêm một tầng thư mục; hai group không được cùng sở hữu một URL |
-| `params`/`searchParams` async → cho phép partial prerendering | Phải `await`; `await` sai chỗ thì mất luôn lợi ích |
-| Convention rõ ràng (`loading`, `error`, `not-found`) | Nhiều file để nhớ; thiếu chúng thì âm thầm mất UX (như repo hiện tại) |
-| `<Link>` prefetch tự động | Prefetch tốn băng thông; cần tắt bằng `prefetch={false}` cho link ít dùng |
-| `redirect()` khai báo, dùng được từ server | Nó **throw** — gọi trong try/catch là bug im lặng |
+| Layout lồng nhau giữ state, chỉ segment đổi được render | Layout không nhận `searchParams`, dữ liệu ở layout dễ cũ |
+| Route group tách layout không đổi URL | Thêm tầng thư mục; hai group không được trùng URL |
+| `params`/`searchParams` async → nền tảng cho PPR | Phải `await` mọi nơi; lợi ích chỉ thật khi bật Cache Components |
+| Convention rõ (`loading`, `error`, `not-found`, `default`) | Thiếu chúng thì âm thầm mất UX/SEO (repo hiện tại) |
+| `<Link>` prefetch tự động | Route dynamic không có `loading.tsx` gần như không được prefetch |
+| `redirect()` khai báo, dùng từ server | Nó **throw** — trong `try/catch` là bug im lặng |
 
 ---
 
 ## 11. Best Practices
 
-1. **Dùng route group cho mỗi "vùng" UI có layout riêng.** Đừng bao giờ viết layout với
-   `if (pathname.startsWith(...))`.
-2. **Coi mọi giá trị từ `searchParams` là input của người dùng.** Whitelist (`tab`), encode
-   (`encodeURIComponent`), và validate redirect target.
-3. **Sửa lỗ open redirect ở `login/page.tsx` + `loginAction`.** Đây là vấn đề bảo mật cụ thể nhất
-   tìm thấy trong repo.
-4. **Gọi `notFound()` thay vì render "Not found" inline.** Bạn được HTTP 404 đúng, SEO đúng, và
-   TypeScript narrowing miễn phí.
-5. **Luôn gọi `redirect()`/`notFound()` ngoài `try/catch`.**
-6. **Thêm `loading.tsx` cho mọi route có fetch.** Đầu tư nhỏ, cải thiện UX rõ rệt.
-7. **Metadata theo group, dùng `template` để nối.** Đừng để cả storefront mang title "Seller dashboard".
-8. **Khi Server Action đổi dữ liệu mà layout hiển thị, nhớ revalidate cả layout.**
+1. **Route group cho mỗi vùng UI có layout riêng** — không bao giờ `if (pathname.startsWith(...))` trong layout.
+2. **`searchParams` là input người dùng:** whitelist, `encodeURIComponent`, validate redirect target.
+3. **Sửa open redirect** ở `login/page.tsx` + `loginAction` bằng `safeRedirect`.
+4. **`notFound()` thay vì render "Not found" inline** — 404 thật, narrowing miễn phí; nhớ tương tác với `loading.tsx`.
+5. **`redirect()`/`notFound()` ngoài `try/catch`**, hoặc `unstable_rethrow`.
+6. **`loading.tsx` cho route dynamic có fetch** — vừa streaming vừa giúp prefetch.
+7. **Metadata theo group với `template`**, `generateMetadata` cho trang sản phẩm.
+8. **Action đổi dữ liệu hiển thị ở layout** → `refresh()` hoặc `revalidatePath(..., 'layout')`, nói đúng ý.
 
 ---
 
 ## Tự kiểm tra
 
-1. Vì sao `(seller)/seller/page.tsx` cho ra URL `/seller` mà không phải `/seller/seller`?
-2. Nếu không có route group, layout root phải làm gì? Kể ba vấn đề của cách đó.
-3. Vì sao `params` là Promise? Điều đó cho phép Next.js làm gì?
-4. Vì sao badge giỏ hàng trong `StoreHeader` không cập nhật sau "Add to cart"?
+1. Vì sao `(seller)/seller/page.tsx` cho URL `/seller`?
+2. Không có route group, layout root phải làm gì? Kể ba vấn đề.
+3. Next 16 thay đổi gì với `params` so với Next 15? Lợi ích của việc là Promise chỉ thật sự có khi nào?
+4. Vì sao badge giỏ hàng *hiện* vẫn cập nhật sau "Add to cart", và vì sao vẫn nên sửa?
 5. Chỉ ra lỗ open redirect trong repo và cách sửa.
-6. `redirect()` hoạt động bằng cơ chế gì? Vì sao gọi nó trong `try/catch` là bug?
-7. Vì sao `notFound()` cho bạn TypeScript narrowing miễn phí?
+6. Vì sao cuộn qua grid sản phẩm không prefetch trang chi tiết? Sửa thế nào?
+7. Khi nào `notFound()` trả về 404, khi nào chỉ là 200 + `noindex`?
 
 ➡️ Tiếp theo: `10-data-fetching-caching.md`

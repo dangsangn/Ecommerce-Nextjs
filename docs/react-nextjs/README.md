@@ -1,7 +1,7 @@
 # Ôn tập React (18 → 19) & Next.js App Router
 
 Bộ tài liệu này được viết để **ôn lại kiến thức một cách có hệ thống**, không phải để tra API.
-**31 chương**, chia sáu phần: nền tảng React → App Router → tổng hợp → nâng cao → thực chiến → lộ trình.
+**24 chương**, chia bốn phần: nền tảng React → App Router → tổng hợp → nâng cao.
 Toàn bộ ví dụ được lấy từ chính source code của repo này (`app/`, `components/`, `actions/`, `lib/`, `proxy.ts`).
 
 ## Repo này đang chạy gì?
@@ -42,7 +42,7 @@ Vì repo dùng React 19, tài liệu sẽ đi theo trình tự **React 18 giới
 | 09 | `09-routing-layout-route-groups.md` | Route group, nested layout, `params`/`searchParams` async |
 | 10 | `10-data-fetching-caching.md` | `no-store`, `revalidatePath`, tags, dynamic vs static |
 | 11 | `11-server-actions-va-forms.md` | `'use server'`, `useActionState`, `useFormStatus`, progressive enhancement |
-| 12 | `12-proxy-middleware-va-auth.md` | `proxy.ts`, Edge runtime, cookie/session, refresh token |
+| 12 | `12-proxy-middleware-va-auth.md` | `proxy.ts` (Node.js runtime), cookie/session, refresh token |
 | 13 | `13-render-pipeline-va-hydration.md` | Một request đi qua những gì? Hydration mismatch từ đâu ra? |
 
 ### Phần C — Tổng hợp
@@ -66,31 +66,8 @@ Vì repo dùng React 19, tài liệu sẽ đi theo trình tự **React 18 giới
 | 20 | `20-route-handlers-streaming-realtime.md` | Khi nào cần `route.ts`; streaming; SSE theo dõi đơn hàng; webhook thanh toán |
 | 21 | `21-typescript-nang-cao-cho-react.md` | Branded types chặn bug ID; discriminated union; validate response bằng Zod |
 | 22 | `22-bundle-va-performance-engineering.md` | Đo cái gì thực sự ship; barrel file; `next/dynamic`; Web Vitals thật |
-| 23 | `23-accessibility-engineering.md` | Focus trap, live region, `aria-current` — và 12 vấn đề a11y thật trong repo |
+| 23 | `23-accessibility-engineering.md` | Focus trap, live region, `aria-current` — và 8 vấn đề a11y thật trong repo |
 | 24 | `24-security-nang-cao.md` | CSRF trên Server Actions, IDOR, path traversal, CSP + nonce, taint API |
-
-### Phần E — Thực chiến (production)
-
-> Phần D cho chiều sâu kỹ thuật. Phần E cho những gì cần để app **chạy thật**: debug được, deploy được,
-> test được, và đúng với người dùng Việt Nam.
-
-| # | File | Bạn sẽ trả lời được câu hỏi gì |
-| --- | --- | --- |
-| 25 | `25-debugging-va-devtools.md` | Bug ở tầng nào? Đọc Profiler, soi fiber, xem RSC payload. Bảng triệu chứng → nguyên nhân |
-| 26 | `26-forms-nang-cao.md` | Field array (biến thể sản phẩm), upload có progress, autosave, wizard sống qua refresh |
-| 27 | `27-i18n-va-formatting.md` | **Bug tiền tệ trong repo**; `Intl` cho VND/ngày/sắp xếp; thêm i18n vào app đã có `proxy.ts` |
-| 28 | `28-deployment-va-production-ops.md` | Env build-time vs runtime, Docker standalone, health check, cache đa instance, logging |
-| 29 | `29-testing-e2e-va-tich-hop.md` | Test cái gì ở tầng nào; Playwright cho luồng mua hàng; chống flaky |
-| 30 | `30-tips-va-gotchas.md` | 10 API ít biết, 15 gotcha, state library có cần không, chia sẻ type với backend |
-
-### Phần F — Lộ trình
-
-| # | File | Nội dung |
-| --- | --- | --- |
-| 31 | `31-lo-trinh-senior.md` | Bảng tự đánh giá 36 tiêu chí; lộ trình 24 tuần; kiến thức ngoài React; luyện phán đoán & giao tiếp |
-
-> ⚠️ **File `31` không phải chương kiến thức** — nó là kế hoạch hành động. Đọc nó khi bạn đã xong
-> Phần A–C và muốn biết phải làm gì tiếp để kiến thức thành năng lực.
 
 ---
 
@@ -102,18 +79,14 @@ Vì repo dùng React 19, tài liệu sẽ đi theo trình tự **React 18 giới
 4. **Các mục ⚠️ là vấn đề thật đang tồn tại trong repo này** — dùng chúng như bài tập refactor.
 5. **Phần D đọc sau, nhưng file `15` có thể đọc ngay sau `07`** — nó giải thích *vì sao* mọi quy tắc ở
    phần A là đúng, nên đọc sớm giúp phần A "dính" hơn.
-6. **File `25` (debugging) đọc được bất cứ lúc nào** — nó là kỹ năng, không phụ thuộc chương khác.
 
-### Ba lộ trình gợi ý theo mục tiêu
+### Lộ trình gợi ý theo mục tiêu
 
 | Mục tiêu | Đọc |
 | --- | --- |
 | **Ôn nhanh để phỏng vấn** | `01` → `02` → `03` → `08` → `11` → `15` → `10` |
 | **Nâng cấp repo này lên production-ready** | `14` (checklist) → `24` (security) → `23` (a11y) → `22` (perf) → `06` + `09` |
 | **Hiểu sâu để thiết kế kiến trúc** | `15` → `18` → `17` → `21` → `08` → `19` |
-| **Sắp deploy production** | `28` → `24` → `29` → `22` → `25` |
-| **Chỉ cần tip thực chiến** | `25` → `30` → `27` |
-| **Không biết bắt đầu từ đâu** | `31` (mục 11: 3 việc làm ngay hôm nay) |
 
 ## Quy ước trong tài liệu
 

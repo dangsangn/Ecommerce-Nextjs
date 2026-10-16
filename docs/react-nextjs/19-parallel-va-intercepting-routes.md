@@ -1,7 +1,9 @@
 # 19. Parallel Routes & Intercepting Routes
 
 > **Mục tiêu:** hiểu hai convention khó nhất của App Router. Dựng được modal "chia sẻ link được"
-> (Instagram-style) và dashboard nhiều vùng độc lập — cả hai đều áp dụng trực tiếp vào repo này.
+> (Instagram-style) và dashboard nhiều vùng độc lập — cả hai áp dụng trực tiếp vào repo này.
+>
+> Phiên bản: Next.js 16.2 — **mọi slot bắt buộc có `default.tsx`, thiếu là build fail.**
 
 ---
 
@@ -9,7 +11,8 @@
 
 ### Vấn đề 1: một layout, nhiều vùng độc lập
 
-📄 Hình dung `app/(seller)/seller/page.tsx` phát triển thành một dashboard thật:
+📄 Hình dung `app/(seller)/seller/page.tsx` (hiện chỉ là mảng `QUICK_ACTIONS` tĩnh) phát triển thành
+dashboard thật:
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -17,32 +20,23 @@
 │  (API chậm, 800ms)  │  (API nhanh, 100ms)   │
 ├─────────────────────┼───────────────────────┤
 │  Sản phẩm sắp hết   │  Đánh giá gần đây     │
-│  (500ms)            │  (300ms)              │
 └─────────────────────────────────────────────┘
 ```
 
-Với một `page.tsx` duy nhất, bạn có thể bọc mỗi vùng trong `<Suspense>` (file `06`). Điều đó giải quyết
-được **loading**. Nhưng:
-
-- ❌ Mỗi vùng **không có `error.tsx` riêng** — lỗi ở "Doanh thu" cần error boundary tự viết
-- ❌ Mỗi vùng **không có route riêng** — không deep-link vào "chỉ xem doanh thu"
-- ❌ Tất cả nằm trong **một file** — bốn team sửa cùng một file
+Bọc mỗi vùng trong `<Suspense>` (file `06`) giải quyết **loading**. Nhưng mỗi vùng **không có
+`error.tsx` riêng**, **không có route riêng**, và tất cả nằm trong **một file**.
 
 ### Vấn đề 2: modal phải vừa là modal, vừa là trang
 
-Đây là vấn đề mà mọi app e-commerce đều gặp.
-
 Người dùng ở `/` (danh mục), bấm một sản phẩm. Bạn muốn:
 
-- **Bấm từ danh mục** → mở **modal** xem nhanh, giữ nguyên grid phía sau, đóng lại là về danh mục
-- **Copy URL đó gửi cho bạn bè** → họ mở ra thấy **trang chi tiết đầy đủ**
-- **Refresh (F5) khi modal đang mở** → thấy **trang chi tiết đầy đủ**, không phải modal lơ lửng
-- **Nút Back** → đóng modal, không rời khỏi trang
+- **Bấm từ danh mục** → **modal** xem nhanh, grid vẫn phía sau
+- **Copy URL gửi bạn bè** / **F5** → **trang chi tiết đầy đủ**
+- **Nút Back** → đóng modal, không rời trang
 
-Cùng một URL `/products/abc123`, **hai UI khác nhau tuỳ cách bạn đến đó.**
-
-Làm bằng state ở client thì mất "chia sẻ link được". Làm bằng route thường thì mất "modal trên nền
-danh mục". **Intercepting Routes giải quyết đúng bài toán này.**
+Cùng URL `/products/abc`, **hai UI tuỳ cách bạn đến đó.** Làm bằng state client thì mất "chia sẻ
+link được"; làm bằng route thường thì mất "modal trên nền danh mục". **Intercepting + Parallel
+Routes giải quyết đúng bài toán này.**
 
 ---
 
@@ -50,70 +44,61 @@ danh mục". **Intercepting Routes giải quyết đúng bài toán này.**
 
 ### 🧠 Parallel routes như nhiều `{children}` có tên
 
-Layout thường chỉ có **một** cái lỗ:
-
-```tsx
-export default function Layout({ children }) {
-  return <div>{children}</div>
-}
-```
-
-Parallel routes cho layout **nhiều lỗ có tên**:
-
-```tsx
-export default function Layout({ children, revenue, orders }) {
-  return (
-    <div>
-      {children}
-      <div className="grid grid-cols-2">
-        {revenue}
-        {orders}
-      </div>
-    </div>
-  )
-}
-```
-
-Mỗi lỗ là một **slot**, khai báo bằng thư mục `@tên`:
+Layout thường có **một** lỗ (`children`). Parallel routes cho layout **nhiều lỗ có tên** — mỗi lỗ là
+một **slot**, khai báo bằng thư mục `@tên`:
 
 ```
 app/(seller)/seller/
 ├── layout.tsx        ← nhận { children, revenue, orders }
-├── page.tsx          ← điền vào `children`
+├── page.tsx          ← điền vào `children` (children là slot ngầm định)
 ├── @revenue/
 │   ├── page.tsx      ← điền vào `revenue`
-│   ├── loading.tsx   ← ⭐ loading RIÊNG của slot này
-│   └── error.tsx     ← ⭐ error boundary RIÊNG
-└── @orders/
-    ├── page.tsx
-    ├── loading.tsx
-    └── error.tsx
+│   ├── default.tsx   ← ⚠️ BẮT BUỘC (Next 16)
+│   ├── loading.tsx   ← loading RIÊNG
+│   └── error.tsx     ← error boundary RIÊNG
+└── @orders/ ...
 ```
 
-**`@revenue` KHÔNG xuất hiện trong URL.** Giống route group `(store)` — nó chỉ là công cụ tổ chức.
+```tsx
+// app/(seller)/seller/layout.tsx
+export default function Layout({ children, revenue, orders }: LayoutProps<'/seller'>) {
+  return (
+    <>
+      {children}
+      <div className="grid gap-6 lg:grid-cols-2">{revenue}{orders}</div>
+    </>
+  )
+}
+```
 
-**Điểm mấu chốt:** mỗi slot là một **subtree độc lập** với `loading.tsx`, `error.tsx`, và trạng thái
-navigation riêng. Đó là thứ `<Suspense>` một mình không cho bạn.
+`LayoutProps<'/seller'>` là helper **global** (sinh ra khi `next dev`/`next build`/`next typegen`) —
+nó tự suy ra `params` **và các slot** từ cấu trúc thư mục, không cần import.
+
+- **`@revenue` KHÔNG xuất hiện trong URL** — giống route group, chỉ là công cụ tổ chức.
+- Mỗi slot là một **subtree độc lập**: `loading.tsx`, `error.tsx`, trạng thái navigation riêng, và được
+  **stream độc lập**.
+
+### 🧠 Slot "nhớ" trạng thái khi soft nav, quên khi hard nav
+
+Đây là quy tắc gốc giải thích mọi hành vi lạ của parallel routes:
+
+| Loại navigation | Slot không khớp URL mới thì sao? |
+| --- | --- |
+| **Soft** (bấm `<Link>`, `router.push`) | **Giữ nguyên** nội dung đang hiện (partial render) |
+| **Hard** (F5, gõ URL, mở tab mới) | Render **`default.tsx`** của slot đó |
 
 ### 🧠 Intercepting routes như "chặn thư giữa đường"
 
-Khi người dùng navigate tới `/products/abc`, bình thường Next.js render
-`app/(store)/products/[id]/page.tsx`.
-
-Intercepting route nói: *"nếu request này đến từ **soft navigation** trong app, hãy đưa nó cho tôi
-thay vì cho route thật."*
-
 ```
 Soft nav (bấm <Link> trong app):
-  /products/abc ──▶ 🚧 CHẶN ──▶ (.)products/[id]/page.tsx  → render thành MODAL
+  /products/abc ──▶ 🚧 CHẶN ──▶ @modal/(.)products/[id]/page.tsx  → MODAL (children giữ danh mục)
 
 Hard nav (gõ URL / F5 / mở từ ngoài):
-  /products/abc ──────────────▶ products/[id]/page.tsx      → render TRANG ĐẦY ĐỦ
+  /products/abc ──────────────▶ products/[id]/page.tsx             → TRANG ĐẦY ĐỦ
 ```
 
-**Vì sao hai đường lại khác nhau?** Vì soft navigation đi qua **router ở client** — Next.js biết bạn
-đang ở đâu và có thể quyết định "giữ trang cũ, chồng modal lên". Hard navigation là một HTTP request
-mới — không có "trang cũ" nào để chồng lên.
+Soft nav đi qua **router ở client** — Next biết bạn đang ở đâu nên có thể "giữ trang cũ, chồng modal
+lên". Hard nav là một HTTP request mới — không có "trang cũ" nào để chồng.
 
 ---
 
@@ -121,377 +106,191 @@ mới — không có "trang cũ" nào để chồng lên.
 
 | Cú pháp | Nghĩa | Tương tự |
 | --- | --- | --- |
-| `(.)folder` | Chặn route ở **cùng cấp** | `./folder` |
-| `(..)folder` | Chặn route ở **một cấp trên** | `../folder` |
+| `(.)folder` | Chặn route **cùng cấp** | `./folder` |
+| `(..)folder` | Chặn route **một cấp trên** | `../folder` |
 | `(..)(..)folder` | Chặn route **hai cấp trên** | `../../folder` |
 | `(...)folder` | Chặn route tính từ **`app/` root** | `/folder` |
 
-⚠️ **Cạm bẫy quan trọng: các cấp được tính theo cấu trúc ROUTE (URL), không phải theo hệ thống file.**
-
-Route group `(store)` không tạo cấp URL, nên nó **không** được đếm:
+⚠️ **Cấp được tính theo ROUTE SEGMENT (URL), không theo hệ thống file.** Cả **route group `(store)`**
+lẫn **thư mục slot `@modal`** đều **không** được đếm:
 
 ```
 app/
 └── (store)/
     ├── page.tsx                    → /
     ├── @modal/
-    │   └── (.)products/[id]/       → chặn /products/:id   ⭐ dùng (.) không phải (..)
+    │   └── (.)products/[id]/       → chặn /products/:id   ⭐ (.) chứ không phải (..)
     └── products/[id]/page.tsx      → /products/:id
 ```
 
-Về mặt file, `@modal` và `products` đều nằm trong `(store)`. Về mặt URL, cả hai ở cấp gốc.
-Nên `(.)products` là đúng — dù trực giác về đường dẫn file có thể mách bạn `(..)`.
-
-**Đây là lỗi phổ biến nhất khi dùng intercepting routes.** Nếu modal không hiện, hãy kiểm tra số dấu
-chấm trước tiên.
+Về file, `(.)products` nằm sâu hơn `products` hai cấp. Về URL, cả hai ở cấp gốc → `(.)`. **Modal không
+hiện? Kiểm tra số dấu chấm trước tiên** — sai là bug im lặng, không có lỗi nào.
 
 ---
 
 ## 4. 🛠️ Bài tập 1: Product Quick-View Modal
 
-Áp dụng vào repo: bấm sản phẩm từ danh mục → modal xem nhanh; share link → trang đầy đủ.
-
 ### Cấu trúc file
 
 ```
 app/(store)/
-├── layout.tsx                          ← SỬA: nhận thêm prop `modal`
-├── default.tsx                         ← MỚI (bắt buộc, giải thích ở dưới)
+├── layout.tsx                          ← SỬA: nhận thêm slot `modal`
 ├── page.tsx                            → /
-├── products/[id]/page.tsx              → /products/:id  (trang đầy đủ, GIỮ NGUYÊN)
+├── products/[id]/page.tsx              → /products/:id  (trang đầy đủ)
 └── @modal/
-    ├── default.tsx                     ← MỚI (bắt buộc)
-    └── (.)products/[id]/
-        └── page.tsx                    ← MỚI: bản modal
+    ├── default.tsx                     ← BẮT BUỘC: return null
+    ├── page.tsx                        ← return null — đóng modal khi soft nav về /
+    ├── [...catchAll]/page.tsx          ← return null — đóng modal khi soft nav đi nơi khác
+    └── (.)products/[id]/page.tsx       ← bản modal
 ```
 
 ### Bước 1 — Layout nhận slot
 
-```tsx
-// app/(store)/layout.tsx
-import { StoreHeader } from '@/components/store/store-header'
+📄 `app/(store)/layout.tsx` hiện chỉ nhận `children` (render `StoreHeader`, `<main>`, footer PERKS):
 
+```tsx
 export default function StoreLayout({
   children,
-  modal,                                  // ⭐ slot @modal
+  modal,                                    // ⭐ slot @modal
 }: {
   children: React.ReactNode
   modal: React.ReactNode
 }) {
   return (
-    <div className="min-h-full">
+    <div className="flex min-h-full flex-1 flex-col bg-surface">
       <StoreHeader />
-      <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
-      {modal}                             {/* ⭐ render slot; thường là null */}
-      <footer className="border-t">
-        <div className="mx-auto max-w-6xl px-4 py-6 text-sm text-muted-foreground">© Shop</div>
-      </footer>
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">{children}</main>
+      {modal}                               {/* thường là null */}
+      <footer className="mt-8 bg-card">{/* PERKS ... */}</footer>
     </div>
   )
 }
 ```
 
-### Bước 2 — ⭐ `default.tsx`: file khó hiểu nhất của parallel routes
+### Bước 2 — ⭐ `default.tsx` và catch-all: hai file mọi người quên
 
 ```tsx
 // app/(store)/@modal/default.tsx
 export default function ModalDefault() {
   return null
 }
+
+// app/(store)/@modal/[...catchAll]/page.tsx
+export default function CloseModal() {
+  return null
+}
 ```
 
-```tsx
-// app/(store)/default.tsx
-import StoreHomePage from './page'
-export default StoreHomePage
-```
+**`default.tsx` trả lời câu hỏi:** *"sau hard nav, slot này không khớp URL hiện tại thì render gì?"*
 
-**Vì sao cần `default.tsx`? Đây là chỗ mọi người bị mắc.**
+- Ở `/cart` sau F5: `children` → `cart/page.tsx`; `@modal` không có `cart` → `default.tsx` → `null`.
+- F5 khi modal đang mở ở `/products/abc`: `children` khớp trang đầy đủ; `@modal` không suy ra được trạng
+  thái → `default.tsx` → `null`. ✅ Đúng hành vi ta muốn.
 
-Next.js phải render **mọi slot** cho **mọi URL**. Khi bạn ở `/cart`:
+⚠️ **Next 16: thiếu `default.tsx` cho một slot `@name` → build fail.** (Next 15 trả 404 lúc runtime.)
+Muốn giữ hành vi 404 cũ thì cho `default.tsx` gọi `notFound()`.
 
-- Slot `children` → render `cart/page.tsx` ✅
-- Slot `modal` → **render cái gì?** Không có `@modal/cart/page.tsx`
+**Vì sao cần thêm catch-all?** Nhớ quy tắc: **soft nav giữ nguyên slot không khớp.** Modal đang mở, người
+dùng bấm "Giỏ hàng" trên header → `children` đổi sang `/cart`, nhưng `@modal` **vẫn hiện modal cũ** vì
+không có gì trong `@modal` khớp `/cart`. `[...catchAll]/page.tsx` trả `null` làm `@modal` khớp **mọi**
+URL khác → modal đóng. `[...catchAll]` cần ít nhất một segment nên **không** khớp `/` → thêm
+`@modal/page.tsx` trả `null` để bấm logo về trang chủ cũng đóng modal.
 
-Nếu không có `default.tsx`, Next.js **không biết** phải điền gì vào slot `modal` → lỗi 404 hoặc lỗi
-build.
+> `children` cũng là một slot ngầm định (`app/page.js` ≡ `app/@children/page.js`). Docs Next khuyến nghị
+> tạo luôn `app/(store)/default.tsx` (thường gọi `notFound()`) làm fallback khi Next không khôi phục được
+> trạng thái của `children` sau hard nav — ví dụ một URL mà slot khác có trang nhưng `children` thì không.
 
-`default.tsx` là câu trả lời cho: *"khi slot này không khớp URL hiện tại, render gì?"*
-
-- `@modal/default.tsx` → `null` (không có modal)
-- `(store)/default.tsx` → trang chủ (fallback cho slot `children` sau hard nav)
-
-**Chi tiết tinh vi hơn nữa:** `default.tsx` được dùng khi Next.js **không thể suy ra** state của slot —
-điển hình là sau một **hard navigation hoặc full page reload** khi router cache không còn thông tin về
-slot đó.
-
-Đây là cơ chế cho hành vi ta muốn: F5 khi modal mở → `@modal` không suy ra được → dùng `default.tsx`
-→ `null` → không modal. Còn `children` khớp `/products/abc` → render trang đầy đủ. ✅
-
-> **Quy tắc:** mỗi slot `@name` **phải** có `default.tsx`. Nếu bạn thấy lỗi
-> *"parallel route ... did not match"* — thiếu `default.tsx`.
-
-### Bước 3 — Modal shell (Client Component)
-
-Cần client vì có keyboard, click-outside, và focus management:
+### Bước 3 — Modal shell (Client Component) dùng `<dialog>` native
 
 ```tsx
 // components/store/route-modal.tsx
 'use client'
-import { useCallback, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { X } from 'lucide-react'
 
-export function RouteModal({
-  children,
-  label,
-}: {
-  children: React.ReactNode
-  label: string
-}) {
+export function RouteModal({ children, label }: { children: React.ReactNode; label: string }) {
   const router = useRouter()
-  const panelRef = useRef<HTMLDivElement>(null)
-  const previouslyFocused = useRef<HTMLElement | null>(null)
+  const ref = useRef<HTMLDialogElement>(null)
 
-  // router.back() đóng modal VÀ xoá entry khỏi history →
-  // nút Back của browser hoạt động đúng như người dùng mong đợi.
-  const close = useCallback(() => router.back(), [router])
-
-  // Escape để đóng
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [close])
-
-  // Lock scroll — pattern lưu/khôi phục từ seller-mobile-nav.tsx (file 03)
-  useEffect(() => {
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [])
-
-  // Focus management: nhớ nơi focus cũ, focus vào panel, trả về khi đóng
-  useEffect(() => {
-    previouslyFocused.current = document.activeElement as HTMLElement | null
-    panelRef.current?.focus()
-    return () => previouslyFocused.current?.focus()
-  }, [])
-
-  // Focus trap — Tab không được thoát ra khỏi modal (chi tiết ở file 23)
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || !panelRef.current) return
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
-      )
-      if (focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
+    // showModal(): top layer + backdrop + phần còn lại của trang thành inert (focus trap miễn phí)
+    if (!ref.current?.open) ref.current?.showModal()
   }, [])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={close}
-        aria-hidden="true"
-      />
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-        tabIndex={-1}
-        className="relative max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-background p-6 shadow-lg outline-none"
-      >
-        <button
-          type="button"
-          onClick={close}
-          aria-label="Đóng"
-          className="absolute right-4 top-4 text-muted-foreground hover:text-foreground"
-        >
+    <dialog
+      ref={ref}
+      aria-label={label}
+      onClose={() => router.back()}          // Escape → 'close' → back
+      onClick={(e) => e.target === ref.current && router.back()}   // click backdrop
+      className="m-auto max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-background shadow-lg backdrop:bg-black/50"
+    >
+      {/* padding đặt ở div con: nếu đặt trên <dialog>, click vào vùng padding cũng có
+          e.target === dialog → bị hiểu nhầm là click backdrop và đóng modal */}
+      <div className="relative p-6">
+        <button type="button" onClick={() => router.back()} aria-label="Đóng" className="absolute right-4 top-4">
           <X className="size-5" />
         </button>
         {children}
       </div>
-    </div>
+    </dialog>
   )
 }
 ```
 
-**Tại sao `router.back()` mà không phải `router.push('/')`?**
+`showModal()` cho sẵn những thứ trước đây phải tự viết ~60 dòng: Escape để đóng, focus trap (nội
+dung ngoài dialog thành `inert`), `aria-modal`, lớp backdrop. (Vẫn nên khoá scroll `body` nếu cần — xem
+`useDisclosure` ở file `17`.)
+
+**Vì sao `router.back()` mà không phải `router.push('/')`?**
 
 | | `router.back()` | `router.push('/')` |
 | --- | --- | --- |
-| Nút Back của browser | ✅ Đúng — modal đã bị pop khỏi history | ❌ Thêm entry mới → Back mở lại modal |
-| Về đúng trang trước | ✅ Kể cả khi đến từ `/search?q=áo` | ❌ Luôn về `/` |
+| Nút Back sau khi đóng | ✅ Modal đã bị pop khỏi history | ❌ Thêm entry → Back mở lại modal |
+| Về đúng trang trước | ✅ Kể cả `/?q=áo&page=2` | ❌ Luôn về `/` |
 | Giữ vị trí scroll | ✅ | ❌ |
 
-⚠️ **Nhưng `router.back()` có một ca gãy:** nếu người dùng mở modal bằng cách **hard nav** (không có
-history) thì... thực ra ca đó không xảy ra, vì hard nav render trang đầy đủ, không phải modal. Modal
-chỉ tồn tại sau soft nav → luôn có entry để back về. **Đây là lý do intercepting route và
-`router.back()` là một cặp tự nhiên.**
+Và `router.back()` luôn an toàn ở đây: modal **chỉ** tồn tại sau soft nav → luôn có entry để back về.
+Intercepting route và `router.back()` là một cặp tự nhiên.
 
-### Bước 4 — Trang modal (Server Component, chia sẻ code với trang đầy đủ)
-
-Tách phần nội dung dùng chung để **không trùng lặp**:
-
-```tsx
-// components/store/product-detail.tsx  — Server Component
-import { toPriceString } from '@/lib/products/price'
-import { Badge } from '@/components/ui/badge'
-import { AddToCart } from '@/components/store/add-to-cart'
-import type { Product } from '@/types/product'
-
-export function ProductDetail({ product, compact = false }: { product: Product; compact?: boolean }) {
-  const gallery = product.product_images?.length
-    ? product.product_images
-    : [{ url: product.product_thumb, public_id: 'thumb' }]
-  const attrs = product.product_attributes ?? {}
-
-  return (
-    <div className={compact ? 'grid gap-6 sm:grid-cols-2' : 'grid gap-8 md:grid-cols-2'}>
-      <div className="grid grid-cols-2 gap-2">
-        {/* Trong modal chỉ hiện 2 ảnh đầu — modal không nên cuộn dài */}
-        {(compact ? gallery.slice(0, 2) : gallery).map((img) => (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            key={img.public_id}
-            src={img.url}
-            alt={product.product_name}
-            className="aspect-square w-full rounded-md border object-cover"
-          />
-        ))}
-      </div>
-      <div className="space-y-4">
-        <div className="flex items-center gap-2">
-          <h1 className={compact ? 'text-xl font-semibold' : 'text-2xl font-semibold'}>
-            {product.product_name}
-          </h1>
-          <Badge variant="secondary">{product.product_type}</Badge>
-        </div>
-        <p className="text-xl">{toPriceString(product.product_price)}</p>
-        <p className="text-sm text-muted-foreground">Còn lại: {product.product_quantity}</p>
-        {product.product_description ? (
-          <p className={compact ? 'line-clamp-3 text-sm' : 'text-sm'}>{product.product_description}</p>
-        ) : null}
-        {Object.keys(attrs).length > 0 ? (
-          <dl className="grid grid-cols-2 gap-1 text-sm">
-            {Object.entries(attrs).map(([k, v]) => (
-              <div key={k} className="contents">
-                <dt className="text-muted-foreground capitalize">{k}</dt>
-                <dd>{String(v)}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : null}
-        <AddToCart productId={product._id} max={product.product_quantity} />
-      </div>
-    </div>
-  )
-}
-```
+### Bước 4 — Trang modal (Server Component)
 
 ```tsx
 // app/(store)/@modal/(.)products/[id]/page.tsx
 import { notFound } from 'next/navigation'
-import Link from 'next/link'
 import { apiFetch } from '@/lib/api/server-client'
-import { ApiError } from '@/lib/api/http'
+import { normalizeProductDetail } from '@/lib/products/sku'
 import { RouteModal } from '@/components/store/route-modal'
-import { ProductDetail } from '@/components/store/product-detail'
-import type { Product } from '@/types/product'
+import { ProductPurchase } from '@/components/store/product-purchase'
 
-export default async function ProductQuickView({
-  params,
-}: {
-  params: Promise<{ id: string }>
-}) {
-  const { id } = await params
-  let product: Product
-  try {
-    product = await apiFetch<Product>(`/product/${id}`)
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) notFound()
-    throw e
-  }
+export default async function ProductQuickView({ params }: PageProps<'/products/[id]'>) {
+  const { id } = await params                      // params là Promise (Next 15+)
+  const detail = normalizeProductDetail(await apiFetch<unknown>(`/product/${id}`))
+  if (!detail) notFound()
 
   return (
-    <RouteModal label={`Xem nhanh: ${product.product_name}`}>
-      <ProductDetail product={product} compact />
+    <RouteModal label={`Xem nhanh: ${detail.spu.product_name}`}>
+      <ProductPurchase spu={detail.spu} skus={detail.skus} />
       <div className="mt-6 border-t pt-4">
-        <Link href={`/products/${id}`} className="text-sm text-primary hover:underline">
+        {/* ⚠️ <a> thường, KHÔNG phải <Link>: URL đã là /products/:id, một <Link> tới
+            chính nó vẫn là soft nav → bị chặn lại thành modal. <a> ép hard nav. */}
+        <a href={`/products/${id}`} className="text-sm text-primary hover:underline">
           Xem đầy đủ chi tiết & bình luận →
-        </Link>
+        </a>
       </div>
     </RouteModal>
   )
 }
 ```
 
-**Chú ý dòng cuối:** modal **không** hiện phần comment (nó dài và không phù hợp với xem nhanh), nhưng
-cho người dùng một đường đi tới trang đầy đủ. Đó là lý do modal có `compact` — nó là một **view khác**
-của cùng dữ liệu, không phải bản thu nhỏ.
+📄 Trang đầy đủ `app/(store)/products/[id]/page.tsx` hiện đã tách phần mua hàng thành
+`<ProductPurchase spu skus />` (Client Component) — modal **dùng lại đúng component đó**, nên hai view
+không bao giờ lệch nhau. Modal **không** hiện highlights/specifications/comments: nó là **một view khác**
+của cùng dữ liệu (xem nhanh), không phải bản thu nhỏ của trang.
 
-### Bước 5 — Trang đầy đủ dùng lại `ProductDetail`
-
-```tsx
-// app/(store)/products/[id]/page.tsx  (sửa)
-import { Suspense } from 'react'
-import { notFound } from 'next/navigation'
-import Link from 'next/link'
-import { apiFetch } from '@/lib/api/server-client'
-import { ApiError } from '@/lib/api/http'
-import { ProductDetail } from '@/components/store/product-detail'
-import { ProductComments } from '@/components/store/product-comments'
-import { CommentsSkeleton } from '@/components/store/comments-skeleton'
-import type { Product } from '@/types/product'
-
-export default async function ProductDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>
-}) {
-  const { id } = await params
-  let product: Product
-  try {
-    product = await apiFetch<Product>(`/product/${id}`)
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) notFound()
-    throw e
-  }
-
-  return (
-    <div className="space-y-6">
-      <Link href="/" className="text-sm text-primary hover:underline">← Về danh mục</Link>
-      <ProductDetail product={product} />
-      <Suspense fallback={<CommentsSkeleton />}>
-        <ProductComments productId={id} />
-      </Suspense>
-    </div>
-  )
-}
-```
-
-**Ba cải thiện gộp vào một lần sửa** (từ file `06`, `09`, và chương này):
-- `notFound()` thay vì render lỗi inline → HTTP 404 đúng + TypeScript narrowing
-- Comments trong `<Suspense>` → hết waterfall 300ms
-- `ProductDetail` dùng chung → modal và trang không lệch nhau
+> Gợi ý thêm cho trang đầy đủ (file `06`, `16`): thay khối `if (error || !detail) return <p>…</p>`
+> bằng `notFound()` để có HTTP 404 thật, và tách comments ra async component trong `<Suspense>`.
 
 ### Luồng hoàn chỉnh
 
@@ -504,83 +303,52 @@ sequenceDiagram
     U->>R: Bấm ProductCard (<Link href="/products/abc">)
     Note over R: SOFT NAV → intercepting route khớp
     R-->>U: children = danh mục (giữ nguyên)<br/>modal = ProductQuickView
-    Note over U: 🪟 Modal mở, grid vẫn phía sau
-
-    U->>R: Bấm Escape / backdrop / X
+    U->>R: Escape / backdrop / X
     Note over R: router.back()
-    R-->>U: modal = default.tsx = null
-    Note over U: Về danh mục, đúng vị trí scroll
+    R-->>U: modal = default/null, scroll giữ nguyên
 
     Note over U: --- Lần khác ---
     U->>R: Paste /products/abc vào tab mới
     Note over R: HARD NAV → không chặn
     R-->>U: children = trang đầy đủ<br/>modal = default.tsx = null
-    Note over U: 📄 Trang chi tiết, có comment
 ```
 
-### ⚠️ Ba cạm bẫy khi triển khai
+### ⚠️ Bốn cạm bẫy
 
-**(1) Số dấu chấm sai.** `(.)products` không phải `(..)products`, vì `(store)` là route group.
-Đây là lỗi #1.
-
-**(2) Thiếu `default.tsx`.** Cả `@modal/default.tsx` và `(store)/default.tsx`. Triệu chứng: lỗi
-"parallel route did not match" hoặc 404 ở các trang không liên quan.
-
-**(3) `<Link>` từ ngoài route group không bị chặn.** Nếu người dùng ở `/seller/products` và bấm link
-tới `/products/abc`, intercepting route trong `(store)` **có** khớp (vì cùng cây `app/`), nhưng slot
-`@modal` của `(store)` chưa được mount → hành vi có thể không như mong đợi. Kiểm tra thực tế các
-đường vào bạn thực sự hỗ trợ, đừng giả định.
+1. **Số dấu chấm sai.** `(.)products`, vì `(store)` và `@modal` không phải segment.
+2. **Thiếu `@modal/default.tsx`** → Next 16 build fail.
+3. **Thiếu catch-all** → modal "dính" lại khi bấm link khác trên header (soft nav giữ slot).
+4. **Chỉ chặn khi đang ở trong layout chứa slot.** Từ `/seller/products` (layout `(seller)`) bấm tới
+   `/products/abc` → layout `(store)` chưa mount → không chặn → trang đầy đủ. Thường đó lại là điều bạn
+   muốn — nhưng hãy kiểm tra từng đường vào, đừng giả định.
 
 ---
 
 ## 5. 🛠️ Bài tập 2: Seller Dashboard nhiều vùng độc lập
 
-### Cấu trúc
-
 ```
 app/(seller)/seller/
 ├── layout.tsx              ← SỬA: nhận { children, revenue, lowStock }
-├── page.tsx                → nội dung chính (QUICK_ACTIONS hiện tại)
-├── default.tsx
-├── @revenue/
-│   ├── default.tsx
-│   ├── loading.tsx         ← skeleton RIÊNG
-│   ├── error.tsx           ← error boundary RIÊNG
-│   └── page.tsx
-└── @lowStock/
-    ├── default.tsx
-    ├── loading.tsx
-    ├── error.tsx
-    └── page.tsx
+├── page.tsx                → QUICK_ACTIONS hiện tại
+├── @revenue/   default.tsx · loading.tsx · error.tsx · page.tsx
+└── @lowStock/  default.tsx · loading.tsx · error.tsx · page.tsx
 ```
 
-```tsx
-// app/(seller)/seller/layout.tsx
-import { SellerSidebar } from '@/components/seller/seller-sidebar'
-import { SellerMobileNav } from '@/components/seller/seller-mobile-nav'
+📄 `app/(seller)/seller/layout.tsx` hiện render `SellerSidebar` + `SellerMobileNav` + `<main>{children}</main>`.
+Chỉ cần thêm slot vào `<main>`:
 
-export default function SellerLayout({
-  children,
-  revenue,
-  lowStock,
-}: {
-  children: React.ReactNode
-  revenue: React.ReactNode
-  lowStock: React.ReactNode
-}) {
+```tsx
+export default function SellerLayout({ children, revenue, lowStock }: LayoutProps<'/seller'>) {
   return (
-    <div className="flex min-h-screen">
-      <aside className="hidden w-60 shrink-0 border-r border-sidebar-border bg-sidebar md:block">
+    <div className="flex min-h-screen bg-surface">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 border-r border-sidebar-border bg-card md:block">
         <SellerSidebar />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <SellerMobileNav />
         <main className="flex-1 space-y-6 p-6 md:p-10">
           {children}
-          <div className="grid gap-6 lg:grid-cols-2">
-            {revenue}
-            {lowStock}
-          </div>
+          <div className="grid gap-6 lg:grid-cols-2">{revenue}{lowStock}</div>
         </main>
       </div>
     </div>
@@ -588,19 +356,15 @@ export default function SellerLayout({
 }
 ```
 
+⚠️ Layout này bọc **mọi** trang `/seller/*`. Ở `/seller/products` sau F5, `@revenue` không có
+`products/page.tsx` → render `default.tsx`. Nếu chỉ muốn widget ở trang tổng quan, cho `default.tsx`
+trả `null`; nếu muốn hiện mọi nơi, cho `default.tsx` render lại `page.tsx` (`export { default } from './page'`).
+
 ```tsx
 // app/(seller)/seller/@revenue/page.tsx
-import { apiFetch } from '@/lib/api/server-client'
-import { toPriceString } from '@/lib/products/price'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-interface RevenueSummary { total: number; orderCount: number }
-
 export default async function RevenueSlot() {
-  // KHÔNG try/catch — để error.tsx của slot này xử lý.
-  // Đây là điểm khác biệt: lỗi ở đây KHÔNG làm sập cả dashboard.
-  const data = await apiFetch<RevenueSummary>('/order/shop/summary?days=7', { auth: true })
-
+  // KHÔNG try/catch — để error.tsx của slot xử lý. Lỗi ở đây KHÔNG làm sập cả dashboard.
+  const data = await apiFetch<{ total: number; orderCount: number }>('/order/shop/summary?days=7', { auth: true })
   return (
     <Card>
       <CardHeader><CardTitle>Doanh thu 7 ngày</CardTitle></CardHeader>
@@ -614,201 +378,122 @@ export default async function RevenueSlot() {
 ```
 
 ```tsx
-// app/(seller)/seller/@revenue/loading.tsx
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
-
-export default function RevenueLoading() {
-  return (
-    <Card aria-busy="true" aria-label="Đang tải doanh thu">
-      <CardHeader><div className="h-5 w-40 animate-pulse rounded bg-muted" /></CardHeader>
-      <CardContent className="space-y-2">
-        <div className="h-9 w-32 animate-pulse rounded bg-muted" />
-        <div className="h-4 w-24 animate-pulse rounded bg-muted" />
-      </CardContent>
-    </Card>
-  )
-}
-```
-
-```tsx
 // app/(seller)/seller/@revenue/error.tsx
 'use client'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-
-export default function RevenueError({ reset }: { error: Error; reset: () => void }) {
+export default function RevenueError({ unstable_retry }: { error: Error & { digest?: string }; unstable_retry: () => void }) {
   return (
     <Card>
       <CardHeader><CardTitle>Doanh thu 7 ngày</CardTitle></CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">Không tải được số liệu doanh thu.</p>
-        <Button variant="outline" size="sm" onClick={reset}>Thử lại</Button>
+        {/* unstable_retry (thêm ở Next 16.2) re-fetch + re-render chỉ slot này; `reset()` cũ
+            chỉ re-render, không fetch lại — xem file 16 */}
+        <Button variant="outline" size="sm" onClick={() => unstable_retry()}>Thử lại</Button>
       </CardContent>
     </Card>
   )
 }
 ```
 
+`loading.tsx` của slot là một skeleton `Card` bình thường — nó tự thành `<Suspense fallback>` cho slot.
+
 ### Vì sao hơn `<Suspense>` trong một page
 
 | | `<Suspense>` trong `page.tsx` | Parallel route slot |
 | --- | --- | --- |
-| Loading riêng từng vùng | ✅ (viết fallback tay) | ✅ (`loading.tsx` per slot) |
-| **Error boundary riêng** | ⚠️ Phải tự viết ErrorBoundary class | ✅ **`error.tsx` per slot** |
-| **`reset()` chỉ retry vùng đó** | ⚠️ Tự implement | ✅ Có sẵn |
-| Team làm việc song song | ❌ Cùng một file | ✅ Mỗi slot một thư mục |
-| Deep-link vào một vùng | ❌ | ✅ Có route riêng |
+| Loading riêng từng vùng | ✅ (fallback viết tay) | ✅ `loading.tsx` per slot |
+| **Error boundary riêng** | ⚠️ Tự bọc (`unstable_catchError`/class) | ✅ `error.tsx` per slot |
+| Team làm song song | ❌ Cùng một file | ✅ Mỗi slot một thư mục |
+| Sub-navigation riêng trong một vùng | ❌ | ✅ (`@revenue/weekly/page.tsx`…) |
 | Độ phức tạp | Thấp | Cao hơn (nhiều file, `default.tsx`) |
 
-**Điểm quan trọng nhất là "Error boundary riêng".** Với `<Suspense>` một mình, nếu API doanh thu sập,
-lỗi nổi lên `error.tsx` của **cả trang** → toàn bộ dashboard biến thành trang lỗi. Với parallel route,
-chỉ **card doanh thu** hiện lỗi; ba card kia vẫn hoạt động.
+Với `<Suspense>` một mình, API doanh thu sập → lỗi nổi lên `error.tsx` của **cả trang**. Với slot, chỉ
+**card doanh thu** hiện lỗi.
 
-⚖️ **Nhưng đừng dùng parallel routes cho dashboard hiện tại của repo.** `app/(seller)/seller/page.tsx`
-chỉ render một mảng `QUICK_ACTIONS` tĩnh — không fetch gì, không có gì để lỗi. Parallel routes ở đây
-là **over-engineering rõ rệt**: 8 file mới cho 0 lợi ích.
-
-**Ngưỡng đáng dùng:** ≥2 vùng, mỗi vùng **tự fetch dữ liệu riêng**, và bạn **thực sự muốn** chúng lỗi
-độc lập.
+⚖️ **Nhưng đừng dùng cho dashboard hiện tại của repo.** `seller/page.tsx` chỉ render `QUICK_ACTIONS`
+tĩnh — không fetch, không có gì để lỗi. 8 file mới cho 0 lợi ích. **Ngưỡng:** ≥2 vùng, mỗi vùng **tự
+fetch dữ liệu**, và bạn **thực sự muốn** chúng lỗi độc lập.
 
 ---
 
 ## 6. Conditional Routes — cùng URL, hai UI theo điều kiện
 
-Parallel routes cũng dùng để render UI khác nhau theo trạng thái, mà không cần điều kiện trong JSX:
-
-```
-app/(seller)/seller/account/
-├── layout.tsx
-├── @shop/
-│   ├── default.tsx
-│   └── page.tsx          ← UI cho người ĐÃ là shop
-└── @upgrade/
-    ├── default.tsx
-    └── page.tsx          ← UI cho người CHƯA là shop
-```
-
 ```tsx
-// app/(seller)/seller/account/layout.tsx
+// app/(seller)/seller/account/layout.tsx — với @shop/ và @upgrade/ (mỗi slot có default.tsx)
 import { isShop } from '@/lib/auth/session'
 
-export default async function AccountLayout({
-  shop,
-  upgrade,
-}: {
-  shop: React.ReactNode
-  upgrade: React.ReactNode
-}) {
+export default async function AccountLayout({ shop, upgrade }: LayoutProps<'/seller/account'>) {
   return (await isShop()) ? shop : upgrade
 }
 ```
 
-📄 So sánh với code hiện tại — `app/(seller)/seller/account/page.tsx`:
+📄 So với `app/(seller)/seller/account/page.tsx` hiện tại:
 
 ```tsx
 export default async function AccountPage() {
   const payload = await getAccessPayload()
   const isShop = Boolean(payload?.roles?.includes('shop'))
-
-  // New sellers land here from "Start Selling" — give them a focused, guided
-  // upgrade flow instead of burying the form in the account grid.
+  // New sellers land here from "Start Selling" — give them a focused, guided upgrade flow…
   if (!isShop) {
     return (
       <div className="mx-auto max-w-xl space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold">Start selling on SHOP</h1>
-          <p className="text-sm text-muted-foreground">
-            Create your shop to start listing products and reaching buyers.
-          </p>
-        </div>
+        <h1 className="text-2xl font-bold">Start selling on SHOP</h1>
         <UpgradeShopForm isShop={isShop} />
       </div>
     )
   }
-
-  return (
-    <div className="space-y-6">
-      {/* ...UI cho shop... */}
-    </div>
-  )
+  return <div className="space-y-6">{/* ...UI cho shop... */}</div>
 }
 ```
 
-⚖️ **Đánh giá thẳng thắn: code hiện tại TỐT HƠN.**
-
-| | `if (!isShop) return ...` (hiện tại) | Conditional parallel routes |
-| --- | --- | --- |
-| Số file | 1 | 5 |
-| Đọc luồng | Một `if`, thấy ngay | Phải mở 3 file |
-| Comment giải thích | Có, ngay chỗ quyết định | Phân tán |
-| Lợi ích thêm | — | `loading.tsx`/`error.tsx` riêng mỗi nhánh |
-
-Với 44 dòng và hai nhánh đơn giản, `if` là đúng. Conditional parallel routes chỉ đáng khi **mỗi nhánh
-là một subtree lớn** với dữ liệu và trạng thái loading riêng — ví dụ dashboard admin vs dashboard user
-khác nhau hoàn toàn.
-
-> **Đây là bài học chung của chương:** parallel & intercepting routes là công cụ **mạnh và đắt**.
-> Chúng giải quyết những vấn đề mà không cách nào khác giải quyết được (modal share-able, error
-> boundary per vùng). Nhưng chúng thêm nhiều file, nhiều convention phải nhớ, và một `default.tsx`
-> mà ai cũng quên. Chỉ dùng khi bạn thực sự có vấn đề đó.
+⚖️ **Code hiện tại TỐT HƠN:** 1 file vs 5 file, một `if` đọc là thấy, comment nằm ngay chỗ quyết định.
+Conditional parallel routes chỉ đáng khi **mỗi nhánh là một subtree lớn** với dữ liệu và loading riêng
+(ví dụ dashboard admin vs dashboard user khác hoàn toàn).
 
 ---
 
 ## 7. When NOT to Use
 
-| Đừng dùng | Vì | Dùng gì thay thế |
-| --- | --- | --- |
-| Modal mà URL không cần đổi (confirm dialog, tooltip) | Không có gì để share/deep-link | `useState` + `<Dialog>` |
-| Chia layout thành nhiều cột | Đây là CSS grid, không phải routing | `grid grid-cols-2` |
-| Nhiều vùng nhưng cùng một nguồn dữ liệu | Không cần độc lập | Một `page.tsx` + `<Suspense>` |
-| Chỉ cần loading riêng, không cần error riêng | Ít lợi ích, nhiều file | `<Suspense>` trong page |
-| Điều kiện đơn giản 2 nhánh | 5 file cho một `if` | `if (...) return` |
-| Tab trong một trang (Draft/Published) | Đã có `searchParams`, đơn giản hơn | `?tab=` + `<Link>` (như repo đang làm) |
-
----
-
-## 8. Trade-offs
-
-| Lợi ích | Cái giá |
+| Đừng dùng | Dùng gì thay thế |
 | --- | --- |
-| Modal có URL riêng: share, deep-link, Back button đúng | Nhiều file mới; convention `(.)`/`default.tsx` khó nhớ |
-| `loading.tsx` + `error.tsx` **per slot** → cô lập lỗi thật | Số dấu chấm sai là bug im lặng (modal không hiện, không lỗi) |
-| Nhiều team sửa nhiều thư mục, không tranh chấp file | Khó debug: "vì sao slot này render `default`?" |
-| Deep-link vào một vùng dashboard | Router cache có thể giữ slot ở trạng thái cũ giữa các nav |
-| Conditional route mà không có `if` trong JSX | Logic điều kiện bị "ẩn" trong cấu trúc file — kém rõ ràng hơn một `if` |
+| Modal mà URL không cần đổi (confirm xoá, tooltip) | `useState` + `<Dialog>` của base-ui |
+| Chia layout nhiều cột | CSS `grid` |
+| Nhiều vùng cùng một nguồn dữ liệu | Một `page.tsx` + `<Suspense>` |
+| Chỉ cần loading riêng, không cần error riêng | `<Suspense>` trong page |
+| Điều kiện đơn giản 2 nhánh | `if (...) return` |
+| Tab trong một trang (Draft/Published) | `?tab=` + `<Link>` (như repo đang làm) |
+
+⚖️ **Trade-off:** đổi lại modal có URL thật (share, deep-link, Back đúng) và lỗi cô lập per slot, bạn trả
+bằng nhiều file, convention `(.)`/`default.tsx`/catch-all khó nhớ, và những bug im lặng (sai dấu chấm →
+modal không hiện, không lỗi; thiếu catch-all → modal dính).
 
 ---
 
-## 9. Best Practices
+## 8. Best Practices
 
-1. **Mỗi slot `@name` PHẢI có `default.tsx`.** Đây là nguyên nhân #1 của lỗi khi mới dùng.
-
-2. **Đếm dấu chấm theo cấu trúc URL, không theo cây file.** Route group `(store)` không tính.
-
-3. **`router.back()` để đóng modal**, không `router.push`. Nó giữ đúng hành vi nút Back.
-
-4. **Tách nội dung dùng chung** (`ProductDetail`) để modal và trang đầy đủ không lệch nhau.
-
-5. **Modal nên là VIEW KHÁC, không phải bản thu nhỏ.** Bỏ comment, giới hạn ảnh, thêm link "xem đầy đủ".
-
-6. **Slot không `try/catch`** — để `error.tsx` của slot xử lý. Đó chính là lý do dùng parallel route.
-
-7. **Modal phải có `role="dialog"`, `aria-modal`, focus trap, và trả focus khi đóng.** Xem file `23`.
-
-8. **Đừng dùng parallel routes cho layout hoặc điều kiện đơn giản.** Ngưỡng: ≥2 vùng tự fetch dữ liệu
-   và cần lỗi độc lập.
+1. **Mỗi slot `@name` PHẢI có `default.tsx`** — Next 16 build fail nếu thiếu.
+2. **Đếm dấu chấm theo URL segment.** Route group `(store)` và slot `@modal` không tính.
+3. **Modal route cần `@modal/[...catchAll]/page.tsx` trả `null`** để đóng khi soft nav đi nơi khác.
+4. **`router.back()` để đóng modal**, không `router.push`.
+5. **Link "xem đầy đủ" trong modal dùng `<a>`** để ép hard nav.
+6. **Dùng chung component** (`ProductPurchase`) giữa modal và trang đầy đủ; modal là **view khác**, không phải bản thu nhỏ.
+7. **Slot không `try/catch`** — để `error.tsx` của slot xử lý (`unstable_retry` chỉ retry slot đó).
+8. **`<dialog>` + `showModal()`** cho modal shell: Escape, focus trap, inert miễn phí.
+9. **Type layout bằng `LayoutProps<'/route'>`** — slot được suy ra tự động.
+10. **Ngưỡng dùng parallel routes:** ≥2 vùng tự fetch và cần lỗi độc lập.
 
 ---
 
 ## Tự kiểm tra
 
-1. Parallel route slot cho bạn hai thứ mà `<Suspense>` không cho. Là gì?
-2. Vì sao `default.tsx` là bắt buộc? Nó trả lời câu hỏi gì?
-3. Trong `app/(store)/@modal/`, vì sao là `(.)products` mà không phải `(..)products`?
-4. Vì sao F5 khi modal đang mở lại hiện trang đầy đủ? Cơ chế nào?
-5. Vì sao `router.back()` đúng hơn `router.push('/')` khi đóng modal?
-6. Vì sao `RevenueSlot` KHÔNG nên có `try/catch`?
-7. Đánh giá: `app/(seller)/seller/account/page.tsx` nên chuyển sang conditional parallel routes không? Vì sao?
-8. Kể ba trường hợp KHÔNG nên dùng parallel/intercepting routes.
+1. Parallel route slot cho bạn những gì mà `<Suspense>` không cho?
+2. Soft nav và hard nav xử lý slot không khớp URL khác nhau thế nào?
+3. Vì sao `default.tsx` là bắt buộc? Next 16 khác Next 15 ở đâu?
+4. Vì sao cần `@modal/[...catchAll]/page.tsx`? Thiếu nó thì bug gì xảy ra?
+5. Trong `app/(store)/@modal/`, vì sao là `(.)products` mà không phải `(..)products`?
+6. Vì sao F5 khi modal đang mở lại hiện trang đầy đủ?
+7. Vì sao link "xem đầy đủ" trong modal phải là `<a>` chứ không phải `<Link>`?
+8. Vì sao `RevenueSlot` KHÔNG nên có `try/catch`?
+9. `account/page.tsx` có nên chuyển sang conditional parallel routes không? Vì sao?
 
 ➡️ Tiếp theo: `20-route-handlers-streaming-realtime.md`

@@ -2,6 +2,7 @@
 
 > **Mục tiêu:** hiểu React 18 đã thay đổi *cơ chế* gì bên dưới, để các chương sau
 > (Suspense, Transition, Server Components, Actions) không còn là "phép thuật".
+> Repo chạy React `19.2.4` + Next.js `16.2.10` — mọi thứ ở đây vẫn là nền móng của React 19.
 
 ---
 
@@ -9,33 +10,28 @@
 
 ### Vấn đề mà React 18 giải quyết
 
-Trước React 18, render là **đồng bộ và không thể ngắt**. Khi React bắt đầu dựng lại cây component,
-nó chạy một mạch cho đến hết rồi mới nhả main thread. Điều này tạo ra một class lỗi UX rất khó chữa:
+Trước React 18, render là **đồng bộ và không thể ngắt**: React dựng lại cây component một mạch rồi
+mới nhả main thread.
 
-Giả sử bạn có một ô tìm kiếm và một danh sách 5.000 sản phẩm được filter theo từ khoá.
-Người dùng gõ chữ "a" → React render lại toàn bộ danh sách → mất 200ms.
-Trong 200ms đó, main thread bị chiếm hoàn toàn: người dùng gõ tiếp "o" nhưng ô input không hiện chữ,
-con trỏ không nhấp nháy, click không phản hồi. UI bị "đóng băng".
+Ví dụ: ô tìm kiếm filter danh sách 5.000 sản phẩm. Gõ "a" → render lại cả danh sách mất 200ms.
+Trong 200ms đó người dùng gõ tiếp "o" nhưng ô input không hiện chữ, click không phản hồi — UI "đóng băng".
 
-Vấn đề gốc rễ: **React không có khái niệm ưu tiên.** Với nó, việc hiển thị ký tự người dùng vừa gõ
-(cực kỳ gấp) và việc filter 5.000 dòng (có thể chờ) là hai việc quan trọng như nhau.
+Gốc rễ: **React không có khái niệm ưu tiên.** Hiển thị ký tự vừa gõ (rất gấp) và filter 5.000 dòng
+(có thể chờ) bị coi là quan trọng như nhau.
 
 ### React 18 giới thiệu điều gì
 
-React 18 viết lại reconciler thành **concurrent renderer**: một bộ render có thể
-**tạm dừng giữa chừng, nhả main thread cho browser, rồi quay lại tiếp tục — hoặc bỏ luôn kết quả đang dựng**.
-
-Điều này mở ra khả năng phân loại cập nhật theo độ ưu tiên. Từ đó mới có:
+React 18 có **concurrent renderer**: render có thể **tạm dừng, nhả main thread cho browser, rồi tiếp
+tục — hoặc bỏ luôn kết quả đang dựng**. Từ đó mới có:
 
 - `startTransition` / `useTransition` — đánh dấu "cập nhật này không gấp"
 - `useDeferredValue` — hiển thị giá trị cũ trong khi giá trị mới đang được dựng
-- **Streaming SSR + Selective Hydration** — server gửi HTML theo từng phần, client hydrate phần nào cần trước
+- **Streaming SSR + Selective Hydration**
 - **Suspense hoạt động thật sự** trên cả server và client
-- Và xa hơn: **React Server Components** và **Server Actions** trong React 19
+- Và xa hơn: **Server Components**, **Actions** (React 19), `<Activity>` (React 19.2)
 
-> **Điểm quan trọng nhất cần nhớ:** Concurrent rendering **không làm code của bạn nhanh hơn**.
-> Nó làm cho ứng dụng **phản hồi tốt hơn** bằng cách thay đổi *thứ tự* và *tính ngắt được* của công việc.
-> Tổng lượng CPU không giảm — có khi còn tăng nhẹ.
+> **Điểm quan trọng nhất:** concurrent rendering **không làm code nhanh hơn**. Nó làm ứng dụng
+> **phản hồi tốt hơn** bằng cách đổi *thứ tự* và *tính ngắt được* của công việc. Tổng CPU không giảm.
 
 ---
 
@@ -43,28 +39,40 @@ React 18 viết lại reconciler thành **concurrent renderer**: một bộ rend
 
 ### 🧠 Render như một bản nháp có thể xé bỏ
 
-Hãy tưởng tượng React là một hoạ sĩ vẽ bảng thông báo:
+**React 17 (legacy):** hoạ sĩ vẽ trực tiếp lên bảng đang treo; đã bắt đầu là phải vẽ xong, tin gấp
+đến giữa chừng cũng phải chờ.
 
-**React 17 (legacy):** Hoạ sĩ vẽ trực tiếp lên bảng đang treo. Khi đã bắt đầu vẽ, không ai được
-đi qua, không ai được xem bảng cho đến khi vẽ xong. Nếu có tin tức mới quan trọng hơn đến giữa lúc vẽ,
-phải chờ vẽ hết bản cũ.
-
-**React 18 (concurrent):** Hoạ sĩ vẽ trên **giấy nháp ở phòng bên**. Bảng cũ vẫn treo, người xem vẫn
-đọc được. Cứ vài nét, hoạ sĩ dừng lại nhìn ra cửa xem có tin gì gấp hơn không:
+**React 18 (concurrent):** hoạ sĩ vẽ trên **giấy nháp ở phòng bên**, bảng cũ vẫn treo. Cứ vài nét lại
+nhìn ra cửa:
 
 - Không có gì gấp → vẽ tiếp
-- Có tin gấp hơn (người dùng vừa gõ chữ) → **xé bản nháp, vẽ bản mới ngay lập tức**
-- Vẽ xong bản nháp → dán lên bảng trong một lần duy nhất (**commit**)
+- Có tin gấp hơn (người dùng vừa gõ) → **xé bản nháp**, xử lý việc gấp trước
+- Vẽ xong → dán lên bảng trong một lần duy nhất (**commit**)
 
-### Hệ quả trực tiếp của mental model này
-
-Từ hình ảnh trên, ba quy tắc sau trở thành **hiển nhiên** thay vì phải học thuộc:
+Từ hình ảnh này, ba quy tắc trở thành hiển nhiên:
 
 | Quy tắc | Vì sao |
 | --- | --- |
-| **Render phải là hàm pure** | Bản nháp có thể bị xé và vẽ lại nhiều lần. Nếu mỗi lần vẽ đều gửi một request hoặc tăng một biến đếm bên ngoài, bạn sẽ có N request cho một lần hiển thị. |
-| **Không mutate props/state trong render** | Bản nháp bị xé nhưng dữ liệu đã bị sửa → lần vẽ sau bắt đầu từ trạng thái sai. |
-| **Side-effect phải nằm trong `useEffect` / event handler** | Đó là những nơi chạy *sau khi commit*, tức là sau khi bản nháp đã thực sự được dán lên bảng. |
+| **Render phải pure** | Bản nháp có thể bị xé và vẽ lại nhiều lần → side-effect trong render chạy N lần. |
+| **Không mutate props/state trong render** | Nháp bị xé nhưng dữ liệu đã bị sửa → lần vẽ sau bắt đầu từ trạng thái sai. |
+| **Side-effect nằm trong effect / event handler** | Đó là nơi chạy *sau commit* (hoặc khi người dùng thật sự tương tác). |
+
+```tsx
+// ❌ Side-effect trong render: chạy mỗi lần React "vẽ nháp", kể cả bản nháp bị bỏ
+function ProductCard({ product }: { product: Product }) {
+  analytics.track('impression', product._id)
+  viewedIds.push(product._id)            // mutate biến ngoài
+  return <Card>{product.product_name}</Card>
+}
+
+// ✅ Render chỉ tính UI; side-effect chạy sau commit
+function ProductCard({ product }: { product: Product }) {
+  useEffect(() => {
+    analytics.track('impression', product._id)
+  }, [product._id])
+  return <Card>{product.product_name}</Card>
+}
+```
 
 ### Hai pha của một lần cập nhật
 
@@ -78,14 +86,13 @@ Từ hình ảnh trên, ba quy tắc sau trở thành **hiển nhiên** thay vì
                            │  (nếu không bị bỏ)
                            ▼
 ┌─────────────────────── COMMIT PHASE ──────────────────────┐
-│  • Áp thay đổi vào DOM thật                                 │
+│  • Áp thay đổi vào DOM thật, gắn ref                        │
 │  • ĐỒNG BỘ, KHÔNG THỂ NGẮT                                  │
-│  • Chạy useLayoutEffect (sync) → browser paint → useEffect  │
+│  • useLayoutEffect (sync, trước paint) → paint → useEffect  │
 └────────────────────────────────────────────────────────────┘
 ```
 
-Ranh giới này giải thích được rất nhiều thứ, ví dụ: vì sao `useLayoutEffect` có thể gây "jank"
-(nó chặn paint), còn `useEffect` thì không.
+Ranh giới này giải thích vì sao `useLayoutEffect` có thể gây jank (chặn paint), còn `useEffect` thì không.
 
 ---
 
@@ -93,20 +100,18 @@ Ranh giới này giải thích được rất nhiều thứ, ví dụ: vì sao `
 
 ### 3.1 `createRoot` thay cho `ReactDOM.render`
 
-React 18 đổi entry point. Đây không phải chuyện cú pháp — nó là **công tắc bật/tắt concurrent features**:
+Entry point mới là **công tắc bật concurrent features**:
 
 ```tsx
-// React 17 — legacy mode, không có concurrent features
+// React 17 — legacy mode (ReactDOM.render đã bị XOÁ trong React 19)
 ReactDOM.render(<App />, document.getElementById('root'))
 
-// React 18+ — concurrent mode
+// React 18+ — concurrent
 import { createRoot } from 'react-dom/client'
 createRoot(document.getElementById('root')!).render(<App />)
 ```
 
-📄 **Trong repo này bạn không thấy dòng nào như trên** — và đó là điều đáng chú ý.
-
-`app/layout.tsx`:
+📄 **Trong repo không có dòng nào như trên.** `app/layout.tsx` chỉ trả về `<html>`/`<body>`:
 
 ```tsx
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -121,50 +126,35 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
 }
 ```
 
-Next.js App Router **tự quản lý root**: nó gọi `hydrateRoot` (phiên bản concurrent) ở phía client và
-`renderToReadableStream` ở phía server. Bạn không có `index.tsx`, không có `main.tsx`.
+Next.js App Router **tự quản lý root**: client gọi `hydrateRoot`, server dùng API streaming của
+`react-dom/server`. App Router cũng **bật `<StrictMode>` mặc định** (từ Next 13.5.1; tắt bằng
+`reactStrictMode: false` trong `next.config.ts` — đừng tắt).
 
-⚖️ **Trade-off của việc framework giữ root:** bạn được concurrent + streaming miễn phí và không thể
-cấu hình sai, nhưng bạn cũng **mất quyền truy cập** vào các tuỳ chọn của root như `onUncaughtError`,
-`onRecoverableError`, `identifierPrefix`. Muốn xử lý lỗi ở tầng đó, bạn phải dùng cơ chế của Next.js
-(`error.tsx`, `global-error.tsx`) chứ không phải API của React.
+⚖️ **Trade-off:** bạn được concurrent + streaming miễn phí, nhưng **không truy cập** được tuỳ chọn
+của root như `onUncaughtError`, `onRecoverableError`. Xử lý lỗi phải qua cơ chế của Next.js
+(`error.tsx`, `global-error.tsx`, `instrumentation-client.ts`).
 
 ### 3.2 Automatic Batching
 
-**Batching** = gộp nhiều lần `setState` thành **một** lần render.
+**Batching** = gộp nhiều `setState` thành **một** lần render.
 
-React 17 chỉ batch bên trong React event handler. Ngoài phạm vi đó (setTimeout, promise, native event)
-mỗi `setState` gây một lần render riêng:
+React 17 chỉ batch trong React event handler. React 18+ batch **mọi nơi** — promise, timeout,
+native event:
 
 ```tsx
-// ===== React 17 =====
-function handleClick() {
-  setCount(c => c + 1)   //
-  setFlag(f => !f)       // → 1 lần render (được batch, vì trong React event)
-}
-
+// React 17: 2 lần render ❌   |   React 18+: 1 lần render ✅
 setTimeout(() => {
-  setCount(c => c + 1)   // → render #1
-  setFlag(f => !f)       // → render #2  ❌ 2 lần render
+  setCount(c => c + 1)
+  setFlag(f => !f)
 }, 0)
 
-fetch('/api').then(() => {
-  setLoading(false)      // → render #1
-  setData(d)             // → render #2  ❌ 2 lần render
+fetch('/api/cart').then(async res => {
+  setLoading(false)
+  setItems(await res.json())   // React 18+: không có frame "loading=false nhưng items rỗng"
 })
 ```
 
-React 18 batch **mọi nơi**, kể cả trong promise, timeout, native event handler:
-
-```tsx
-// ===== React 18+ =====
-setTimeout(() => {
-  setCount(c => c + 1)
-  setFlag(f => !f)       // → 1 lần render duy nhất ✅
-}, 0)
-```
-
-📄 **Vì sao điều này quan trọng cho repo này.** Xem `components/store/checkout-wizard.tsx`:
+📄 `components/store/checkout-wizard.tsx` có 4 nguồn state:
 
 ```tsx
 const [step, setStep] = useState(0)
@@ -173,36 +163,32 @@ const [method, setMethod] = useState('COD')
 const [state, formAction] = useActionState(placeOrderAction, initialActionState)
 ```
 
-Component này có 4 nguồn state. Khi Server Action `placeOrderAction` resolve, React 19 cập nhật
-`state` (từ `useActionState`) và đồng thời tắt cờ pending nội bộ. Nhờ automatic batching, đây là
-**một lần render**. Ở React 17, cùng logic đó sẽ khiến form nhấp nháy giữa các trạng thái trung gian.
+Khi `placeOrderAction` resolve, React cập nhật `state` và tắt cờ pending của Action trong **cùng một
+lần render** — không có frame trung gian "hết pending nhưng chưa có kết quả".
 
-Nói cách khác: **toàn bộ mô hình Server Actions của React 19 phụ thuộc vào automatic batching**.
-Nếu không có nó, mỗi lần submit form sẽ tạo ra một chuỗi render trung gian nhìn thấy được.
-
-**Khi cần thoát khỏi batching:** dùng `flushSync` — nhưng hãy coi đó là cửa thoát hiểm, không phải công cụ:
+**Thoát khỏi batching:** `flushSync` — cửa thoát hiểm, không phải công cụ hàng ngày:
 
 ```tsx
 import { flushSync } from 'react-dom'
 
-// Chỉ dùng khi bạn CẦN đọc DOM ngay sau khi state đổi
 flushSync(() => setOpen(true))
-// đến đây DOM đã cập nhật, có thể đo kích thước / focus
+// DOM đã cập nhật → có thể đo kích thước / focus ngay
 inputRef.current?.focus()
 ```
 
-### 3.3 StrictMode double-invoke — công cụ chẩn đoán, không phải bug
+### 3.3 StrictMode — công cụ chẩn đoán, không phải bug
 
-Trong **development**, `<StrictMode>` của React 18 làm hai việc:
+Trong **development**, `<StrictMode>` (Next bật sẵn):
 
-1. Gọi function component **hai lần** (và cả reducer, `useMemo` callback...)
-2. **Mount → unmount → mount lại** mỗi component, tức là effect chạy `setup → cleanup → setup`
+1. Gọi function component **hai lần** (cả initializer của `useState`, reducer, callback `useMemo`)
+2. Chạy thêm một chu kỳ **effect `setup → cleanup → setup`** khi mount
+3. Từ React 19: chạy thêm một chu kỳ **ref callback** `gắn → cleanup → gắn`
 
-Đây không phải lỗi. Đây là React đang **ép bạn đối mặt với sự thật**: trong concurrent rendering,
-component của bạn *có thể* bị render nhiều lần và effect *có thể* bị mount lại. Nếu code không chịu
-được điều đó, tốt hơn là vỡ ngay ở dev thay vì lỗi ngẫu nhiên ở production.
+Production **không** double-invoke. Nhưng code vẫn phải chịu được việc này vì ở production component
+vẫn có thể bị render nhiều lần (bản nháp bị bỏ) và effect vẫn có thể bị cleanup rồi chạy lại
+(đổi `key`, `<Activity>` ẩn rồi hiện, điều hướng qua lại). StrictMode chỉ làm lộ bug sớm.
 
-📄 **Một effect vượt qua bài kiểm tra này** — `components/seller/seller-mobile-nav.tsx`:
+📄 **Một effect vượt qua bài kiểm tra** — `components/seller/seller-mobile-nav.tsx`:
 
 ```tsx
 // Lock body scroll while the drawer is open.
@@ -216,92 +202,75 @@ useEffect(() => {
 }, [open])
 ```
 
-Vì sao nó an toàn khi chạy `setup → cleanup → setup`?
-
-1. `setup` lần 1: lưu `prev = ''`, set `'hidden'`
-2. `cleanup`: khôi phục về `''`
-3. `setup` lần 2: lưu `prev = ''` (đúng, vì cleanup đã khôi phục), set `'hidden'`
-
-Kết quả cuối giống hệt như chạy một lần. Đây chính là định nghĩa của một effect **idempotent**.
-
-⚠️ **Phản ví dụ — effect KHÔNG chịu được double-invoke:**
+`setup` (lưu `prev = ''`, set `hidden`) → `cleanup` (khôi phục `''`) → `setup` (lưu lại `''`, set
+`hidden`). Kết quả giống chạy một lần — effect **idempotent**.
 
 ```tsx
-// ❌ SAI: mất giá trị gốc sau lần mount thứ hai
+// ❌ Hardcode giá trị khôi phục: trang gốc dùng overflow: clip sẽ bị đổi thành auto vĩnh viễn
 useEffect(() => {
   document.body.style.overflow = 'hidden'
-  return () => { document.body.style.overflow = 'auto' }  // hardcode 'auto'!
+  return () => { document.body.style.overflow = 'auto' }
 }, [open])
 ```
 
-Nếu trang gốc dùng `overflow: clip`, effect này sẽ đổi nó thành `auto` vĩnh viễn. Bug im lặng,
-rất khó tìm. Việc lưu `prev` trong repo là chi tiết của một người đã từng bị bug này.
-
-⚠️ **Phản ví dụ nghiêm trọng hơn — effect gọi API:**
+⚠️ **Effect gọi API có side-effect trên server:**
 
 ```tsx
-// ❌ Ở dev với StrictMode: gửi 2 request. Ở production concurrent: cũng có thể 2 request.
+// ❌ Dev: 2 request. Production: mỗi lần component mount lại cũng 1 request mới
 useEffect(() => {
   fetch('/api/track-view', { method: 'POST' })
 }, [])
 ```
 
-Với một endpoint "tăng lượt xem", bạn vừa nhân đôi số liệu. Cách sửa: `AbortController` để cancel,
-hoặc — tốt hơn trong App Router — **đưa việc đó ra Server Component hoặc Server Action** ngay từ đầu.
+Với endpoint "tăng lượt xem", bạn vừa nhân đôi số liệu. `AbortController` **không** cứu được (request
+POST đã tới server). Cách đúng trong App Router: ghi lượt xem **ở server** (Server Component /
+Server Action / Route Handler), hoặc làm cho endpoint idempotent (dedupe theo session + productId).
 
 ### 3.4 Streaming SSR & Selective Hydration
 
-Đây là thay đổi có ảnh hưởng lớn nhất tới Next.js App Router.
+Thay đổi ảnh hưởng lớn nhất tới App Router.
 
-**SSR ở React 17 là một quy trình "tất-cả-hoặc-không-gì" gồm 4 bước tuần tự:**
+**SSR ở React 17 là "tất-cả-hoặc-không-gì":**
 
 ```
-Server: fetch TOÀN BỘ data  ──▶  render TOÀN BỘ HTML  ──▶  gửi 1 lần
-Client:                                                    tải TOÀN BỘ JS  ──▶  hydrate TOÀN BỘ
+Server: fetch TOÀN BỘ data ──▶ render TOÀN BỘ HTML ──▶ gửi 1 lần
+Client:                                     tải TOÀN BỘ JS ──▶ hydrate TOÀN BỘ
 ```
 
-Mỗi mũi tên là một **hàng rào chặn**. Một API chậm ở footer làm chậm cả trang. Một bundle JS lớn
-làm cả trang không tương tác được.
+Mỗi mũi tên là một hàng rào: một API chậm ở footer làm chậm cả trang.
 
-**React 18 phá cả bốn hàng rào** bằng `renderToPipeableStream` + Suspense:
+**React 18 phá các hàng rào này** bằng streaming + Suspense:
 
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant S as Server (React 18)
+    participant S as Server
     participant API as Backend API
 
     S->>B: HTML shell (header, layout) — hiện ngay
-    Note over B: First Paint đã xảy ra
-    S->>API: fetch product list
-    S->>API: fetch comments (song song)
-    API-->>S: products
-    S->>B: stream chunk: HTML danh sách sản phẩm
-    Note over B: JS chưa tải xong, nhưng nội dung đã thấy
+    S->>API: fetch product + comments (song song)
+    API-->>S: product
+    S->>B: stream chunk: HTML sản phẩm
     API-->>S: comments
     S->>B: stream chunk: HTML comments
     Note over B: Hydrate phần người dùng click trước
 ```
 
-Hai kỹ thuật đằng sau:
+- **Streaming HTML**: server gửi `<Suspense fallback>` trước; khi data về, gửi thêm chunk HTML kèm
+  script nhỏ để thay fallback bằng nội dung thật.
+- **Selective Hydration**: mỗi Suspense boundary hydrate độc lập. Người dùng click vào phần chưa
+  hydrate → React **ưu tiên hydrate phần đó trước** và replay sự kiện.
 
-- **Streaming HTML**: server gửi `<Suspense fallback>` trước, rồi khi data về thì gửi thêm một chunk
-  HTML kèm một đoạn script nhỏ để "thay thế" fallback bằng nội dung thật.
-- **Selective Hydration**: React hydrate từng Suspense boundary độc lập. Nếu người dùng click vào
-  một phần chưa hydrate, React **ưu tiên hydrate đúng phần đó trước** và replay event click.
-
-📄 Toàn bộ khả năng này là lý do các trang trong repo có thể viết `async` một cách thoải mái —
-`app/(store)/products/[id]/page.tsx`:
+📄 Nhờ vậy page có thể là `async` — `app/(store)/products/[id]/page.tsx`:
 
 ```tsx
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  let product: Product | null = null
+  let detail: ProductDetail | null = null
   try {
-    product = await apiFetch<Product>(`/product/${id}`)
+    detail = normalizeProductDetail(await apiFetch<unknown>(`/product/${id}`))
   } catch (e) { /* ... */ }
-
-  // ...
+  // ... return sớm nếu lỗi
 
   let comments: Comment[] = []
   try {
@@ -309,134 +278,145 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   } catch {
     comments = []
   }
+  const currentUserId = await getClientId()
 ```
 
-`await` trực tiếp trong component chỉ có nghĩa khi renderer biết cách **tạm dừng và tiếp tục** —
-đó chính là concurrent rendering.
-
-⚠️ **Nhưng ở đây có một vấn đề thật sự trong repo.** Hai lệnh `await` trên chạy **tuần tự**:
-`comments` chỉ bắt đầu fetch sau khi `product` đã về. Nếu mỗi request mất 150ms, trang mất 300ms
-thay vì 150ms. Cách sửa (chi tiết ở file `10-data-fetching-caching.md`):
+⚠️ **Vấn đề thật trong repo:** ba `await` chạy **tuần tự** dù không phụ thuộc nhau (comments chỉ cần
+`id`, không cần `detail`). 3 × 150ms = 450ms thay vì ~150ms. Sửa (chi tiết ở `10-data-fetching-caching.md`):
 
 ```tsx
-// Cả hai request khởi động cùng lúc
-const [productRes, commentsRes] = await Promise.allSettled([
-  apiFetch<Product>(`/product/${id}`),
-  apiFetch<Comment[]>(`/comment?productId=${id}`),
+const [detailRes, commentsRes, currentUserId] = await Promise.all([
+  apiFetch<unknown>(`/product/${id}`).then(normalizeProductDetail).catch(() => null),
+  apiFetch<Comment[]>(`/comment?productId=${id}`).catch(() => [] as Comment[]),
+  getClientId(),
 ])
 ```
 
+Tốt hơn nữa: tách comments thành component `async` riêng bọc trong `<Suspense>` để phần sản phẩm
+stream ra trước (file `06`).
+
 ---
 
-## 4. Từ React 18 đến React 19 — bản đồ tính năng
+## 4. Từ React 18 đến React 19.2 — bản đồ tính năng
 
-Repo dùng React `19.2.4`. Bảng dưới đây cho bạn thấy React 19 **không phải một hướng đi mới**,
-mà là việc xây tiếp trên nền móng của 18.
+React 19 không phải hướng đi mới — nó xây tiếp trên nền của 18:
 
 | React 18 đặt nền | React 19 xây lên |
 | --- | --- |
-| Concurrent renderer ngắt được | **Server Components** stable — render trên server, không gửi JS xuống client |
-| `startTransition` | **Actions** — `useActionState`, `useFormStatus`, form action nhận async function |
-| Automatic batching | `useOptimistic` — cập nhật lạc quan rồi tự rollback khi action fail |
-| Suspense + streaming | `use()` — unwrap Promise/Context ngay trong render |
-| — | **`ref` là prop bình thường** — `forwardRef` không còn cần thiết |
+| Concurrent renderer | **Server Components** stable — render trên server, không gửi JS xuống client |
+| `startTransition` | **Actions**: transition nhận async function; `useActionState`, `useFormStatus`, `<form action={fn}>` |
+| Automatic batching | `useOptimistic` — cập nhật lạc quan, tự rollback khi Action kết thúc |
+| Suspense + streaming | `use()` — đọc Promise/Context ngay trong render (được gọi trong `if`) |
+| — | **`ref` là prop bình thường** — không cần `forwardRef`; ref callback được trả cleanup |
 | — | `<Context value={...}>` dùng trực tiếp làm Provider |
-| — | `<title>`, `<meta>`, `<link>` tự động hoist lên `<head>` |
+| — | `<title>`, `<meta>`, `<link>` tự hoist lên `<head>`; `preload`/`preinit` từ `react-dom` |
 
-React 19 cũng **xoá bỏ** một loạt API cũ mà bạn nên biết để không dùng lại:
-`propTypes`, string refs, legacy context (`contextTypes`), `ReactDOM.render`,
-`unmountComponentAtNode`, `findDOMNode`.
+**React 19.2** thêm:
 
-Phiên bản `19.2.x` bổ sung thêm `<Activity>` (giữ state của cây UI đang bị ẩn) và
-`useEffectEvent` (tách "giá trị mới nhất" khỏi dependency array của effect).
-Chúng được nói đến trong file `03` và `05`.
+- `<Activity mode="visible" | "hidden">` — ẩn cây UI nhưng **giữ state**; khi ẩn, effect bị cleanup
+- `useEffectEvent` (stable) — đọc giá trị mới nhất trong effect mà không đưa vào dependency (file `03`)
+- `cacheSignal` (chỉ Server Components) — `AbortSignal` báo khi lifetime của `cache()` kết thúc
+- **Performance Tracks** trong Chrome DevTools — thấy Scheduler/Components track trong tab Performance
 
-📄 **Bằng chứng của "ref là prop" ngay trong repo** — `components/ui/input.tsx`:
+**React Compiler 1.0** (stable): tự memo hoá component/hook lúc build. Trong Next 16 bật bằng
+`reactCompiler: true` ở top-level `next.config.ts` (cần `babel-plugin-react-compiler`), **không bật
+mặc định** — repo này chưa bật (file `04`).
+
+React 19 **xoá** các API cũ: `ReactDOM.render`, `hydrate`, `unmountComponentAtNode`, `findDOMNode`,
+`propTypes`, `defaultProps` cho function component (dùng default parameter), string refs,
+legacy context (`contextTypes`).
+
+📄 **"ref là prop" trong repo** — `components/ui/input.tsx`:
 
 ```tsx
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (
-    <InputPrimitive
-      type={type}
-      data-slot="input"
-      className={cn("...", className)}
-      {...props}
-    />
+    <InputPrimitive type={type} data-slot="input" className={cn("...", className)} {...props} />
   )
 }
 ```
 
-Không có `forwardRef`, không có `React.forwardRef<HTMLInputElement, Props>`. `ref` đi qua `...props`
-như bất kỳ prop nào khác. Nếu đây là React 18, component này **không thể** nhận `ref` và
-`components/store/comment-form.tsx` sẽ không gắn được ref vào form.
+Không có `forwardRef`. `React.ComponentProps<"input">` đã bao gồm `ref`, và `ref` đi qua `...props`
+như mọi prop khác. Vì vậy có thể viết:
+
+```tsx
+const searchRef = useRef<HTMLInputElement>(null)
+<Input ref={searchRef} name="q" />   // ✅ React 19: chạy. React 18: ref bị nuốt mất (cần forwardRef)
+```
 
 ---
 
-## 5. When to Use — bạn có cần *chủ động* làm gì với concurrent rendering?
+## 5. When to Use — bạn có cần *chủ động* làm gì?
 
-Câu trả lời trung thực: **hầu hết là không.** Concurrent rendering là hạ tầng, không phải công cụ
-bạn gọi hàng ngày. Bạn chỉ chủ động can thiệp trong ba tình huống:
+Hầu hết là **không** — concurrent rendering là hạ tầng. Bạn chỉ can thiệp khi:
 
-| Tình huống | Công cụ | Có trong repo này? |
+| Tình huống | Công cụ | Trong repo |
 | --- | --- | --- |
-| Một cập nhật state gây render cây lớn/chậm, làm input lag | `useTransition`, `useDeferredValue` | Chưa cần — mọi danh sách đều nhỏ và render trên server |
-| Một hành động cần phản hồi tức thì trước khi server trả lời | `useOptimistic` | **Nên có** — nút +/- giỏ hàng (xem file `07`) |
-| Một phần trang phụ thuộc data chậm, không nên chặn phần còn lại | `<Suspense>` | Có một chỗ, nhưng vì lý do khác (xem file `06`) |
+| Cập nhật gây render cây lớn, làm input lag | `useTransition`, `useDeferredValue` | Chưa cần — danh sách nhỏ, render trên server |
+| Gọi async (Server Action) từ event handler, cần cờ pending | `useTransition` với async function | `components/products/image-manager.tsx` (upload ảnh) |
+| Phản hồi tức thì trước khi server trả lời | `useOptimistic` | **Nên có** — nút +/- giỏ hàng (file `07`) |
+| Phần trang phụ thuộc data chậm | `<Suspense>` | `app/(seller)/seller/page.tsx` (file `06`) |
+
+📄 `image-manager.tsx` — transition async của React 19:
+
+```tsx
+const [uploading, startUpload] = useTransition()
+
+startUpload(async () => {
+  const result = await prepareImagesAction({ ok: false }, body)
+  if (result.ok && result.data) onUploaded(result.data)
+  else toast.error(result.message ?? 'Could not upload images')
+})
+// uploading === true suốt thời gian await → disable nút "Upload"
+```
 
 ## 6. When NOT to Use
 
-- **Đừng bọc mọi `setState` vào `startTransition`.** Transition có độ ưu tiên *thấp*. Nếu bạn hạ ưu
-  tiên của việc cập nhật ô input, bạn vừa tạo ra chính cái lag mà mình muốn tránh. Input, checkbox,
+- **Đừng bọc mọi `setState` vào `startTransition`.** Transition có ưu tiên *thấp*. Input, checkbox,
   toggle — luôn là cập nhật gấp.
-- **Đừng dùng transition để che một vấn đề khác.** Nếu render chậm vì bạn tính toán O(n²) trong
-  component, transition chỉ làm cho sự chậm đó *bớt lộ*. Hãy sửa thuật toán.
-- **Đừng tắt `StrictMode` vì thấy effect chạy hai lần.** Bạn đang tắt cái đèn báo động, không phải
-  sửa cái cháy.
+
+  ```tsx
+  // ❌ ô input sẽ lag vì value bị hạ ưu tiên
+  onChange={e => startTransition(() => setQuery(e.target.value))}
+  // ✅ input cập nhật gấp, phần nặng hoãn lại
+  onChange={e => setQuery(e.target.value)}
+  const deferredQuery = useDeferredValue(query)  // list filter theo deferredQuery
+  ```
+
+- **Đừng dùng transition để che thuật toán chậm.** Render O(n²) thì sửa thuật toán.
+- **Đừng tắt StrictMode vì effect chạy hai lần.** Đó là tắt đèn báo cháy, không phải dập lửa.
 
 ## 7. Trade-offs
 
 | Lợi ích | Cái giá |
 | --- | --- |
-| UI luôn phản hồi, không đóng băng | Render có thể chạy nhiều lần cho *một* lần hiển thị → mọi thứ không-pure trở thành bug |
-| Streaming SSR: TTFB và FCP tốt hơn nhiều | Mô hình tinh thần phức tạp hơn; debug khó hơn vì thứ tự thực thi không còn tuyến tính |
-| Suspense/Actions/Server Components trở nên khả thi | Tăng nhẹ tổng CPU (do scheduling và các lần render bị bỏ) |
-| Bug về side-effect lộ ra sớm (StrictMode) | Dev experience "ồn ào" hơn: log đôi, effect chạy hai lần |
-| Framework có thể tối ưu thay bạn | Bạn mất quyền kiểm soát chi tiết ở tầng root |
-
-**Vì sao trade-off này đáng chấp nhận:** phần lớn cái giá là **một lần** (học mô hình mới, sửa các
-effect không pure), còn phần lớn lợi ích là **liên tục** (mọi trang, mọi request). Với một ứng dụng
-e-commerce như repo này — nơi FCP ảnh hưởng trực tiếp tới tỷ lệ chuyển đổi — đây là một cái giá rẻ.
+| UI luôn phản hồi | Render có thể chạy nhiều lần cho một lần hiển thị → mọi thứ không pure thành bug |
+| Streaming SSR: TTFB/FCP tốt hơn | Debug khó hơn vì thứ tự thực thi không tuyến tính |
+| Suspense/Actions/RSC khả thi | Tăng nhẹ tổng CPU (scheduling, render bị bỏ) |
+| Bug side-effect lộ sớm (StrictMode) | Dev "ồn ào": log đôi, effect chạy hai lần |
+| Framework tối ưu thay bạn | Mất quyền kiểm soát tầng root |
 
 ---
 
 ## 8. Best Practices
 
-1. **Coi render là một biểu thức pure `(props, state) => UI`.** Trước khi viết bất cứ gì trong thân
-   component, hỏi: "nếu dòng này chạy 3 lần thì có sao không?" Nếu có → nó thuộc về effect hoặc handler.
-
-2. **Luôn viết cleanup cho effect, và luôn khôi phục giá trị *trước đó* chứ không phải giá trị mặc định.**
-   `seller-mobile-nav.tsx` là mẫu để copy.
-
-3. **Giữ `<StrictMode>` bật trong dev.** Nó là bộ test miễn phí cho tính idempotent.
-
-4. **Đừng đo hiệu năng ở development.** StrictMode double-invoke, không có minify, có dev warning —
-   con số bạn thấy không phản ánh production. Luôn benchmark trên `next build && next start`.
-
-5. **Ưu tiên chuyển việc ra server thay vì tối ưu concurrent trên client.** Repo này là ví dụ tốt:
-   không có `useTransition` nào cả, vì phần lớn công việc nặng (fetch, sort, group) đã nằm ở
-   Server Component. Đó là cách tối ưu rẻ nhất.
+1. **Coi render là biểu thức pure `(props, state) => UI`.** Hỏi: "dòng này chạy 3 lần thì có sao không?"
+2. **Cleanup luôn khôi phục giá trị *trước đó*, không phải giá trị mặc định** (mẫu: `seller-mobile-nav.tsx`).
+3. **Giữ StrictMode bật** — bộ test idempotent miễn phí.
+4. **Không đo hiệu năng ở dev.** Benchmark trên `next build && next start`; dùng Performance Tracks
+   của React 19.2 trong DevTools để xem component nào render.
+5. **Ưu tiên chuyển việc ra server** thay vì tối ưu concurrent trên client. Repo này fetch, sort,
+   group ở Server Component — cách tối ưu rẻ nhất.
 
 ---
 
 ## Tự kiểm tra
 
-Trả lời được cả 6 câu này thì bạn đã nắm chương này:
-
 1. Vì sao render phải pure trong concurrent mode? (gợi ý: bản nháp bị xé)
-2. Trong React 18, đoạn này gây bao nhiêu lần render? `setTimeout(() => { setA(1); setB(2) })`
+2. React 18+: `setTimeout(() => { setA(1); setB(2) })` gây bao nhiêu lần render?
 3. `useEffect` khác `useLayoutEffect` ở điểm nào trong sơ đồ hai pha?
-4. StrictMode làm effect chạy `setup → cleanup → setup`. Điều đó *tiết lộ* loại bug nào?
-5. Selective hydration giải quyết vấn đề gì mà streaming HTML một mình không giải quyết được?
-6. Vì sao `components/ui/input.tsx` không cần `forwardRef`?
+4. Production không double-invoke — vậy vì sao effect vẫn phải idempotent?
+5. Selective hydration giải quyết gì mà streaming HTML một mình không giải quyết được?
+6. Vì sao `<Input ref={...}>` chạy được dù `components/ui/input.tsx` không có `forwardRef`?
 
 ➡️ Tiếp theo: `02-state-va-render-model.md`

@@ -4,9 +4,9 @@
 > thay vì luật phải học thuộc. Sau chương này bạn sẽ tự suy ra được vì sao hook không gọi trong `if`,
 > vì sao `key` reset state, và vì sao render phải pure.
 >
-> ⚠️ **Lưu ý về độ chính xác:** đây là mô hình khái niệm khớp với kiến trúc React 18/19. Tên biến và
-> chi tiết triển khai có thể đổi giữa các bản minor — React không cam kết ổn định cho internals.
-> Cái *không* đổi là các bất biến (invariant) mà chương này rút ra.
+> ⚠️ **Lưu ý về độ chính xác:** các con số và tên hàm ở đây đã đối chiếu với `react-dom@19.2.4` (bản
+> repo đang dùng). Code minh hoạ là bản **rút gọn**; chi tiết có thể đổi giữa các bản minor — React
+> không cam kết ổn định cho internals. Cái *không* đổi là các bất biến (invariant) chương này rút ra.
 
 ---
 
@@ -29,14 +29,16 @@ Vấn đề cốt tử: **call stack không tạm dừng được.** Một khi b
 nào "dừng ở giữa, giữ lại vị trí, làm việc khác, rồi quay lại". Muốn dừng, bạn phải throw — mà throw
 thì mất hết state trung gian.
 
-Nếu render không tạm dừng được thì:
-- Không có ưu tiên (mọi cập nhật bằng nhau)
-- Không có `startTransition`
-- Không có streaming SSR
-- Không có Suspense thật
+Render không tạm dừng được → không có ưu tiên, không `startTransition`, không streaming SSR, không
+Suspense thật.
 
 **Giải pháp của React 16+: tự triển khai một call stack riêng bằng linked list trên heap.**
 Đó chính là **Fiber**.
+
+**React 19 hoàn tất bước chuyển:** "legacy root" đã bị xoá cùng `ReactDOM.render`, `ReactDOM.hydrate`,
+`unmountComponentAtNode`, `findDOMNode`, string ref và legacy context (`contextTypes`). Mọi root giờ
+tạo bằng `createRoot`/`hydrateRoot` (Next.js tự gọi `hydrateRoot`) — tức là **mọi app React 19 chạy
+trên concurrent root**. Mọi thứ trong chương này áp dụng cho app của bạn, không phải "chế độ tuỳ chọn".
 
 ---
 
@@ -219,9 +221,10 @@ tạo `topLevel` và `repliesByParent` mới, chỉ push **reference** của com
 
 ```ts
 type Hook = {
-  memoizedState: any        // giá trị hiện tại (state, hoặc deps của useMemo, hoặc destroy fn...)
-  baseState: any
-  queue: UpdateQueue | null // hàng đợi update (với useState/useReducer)
+  memoizedState: any        // useState: giá trị; useMemo: [value, deps]; useRef: { current }; useEffect: effect object
+  baseState: any            // state "gốc" để áp lại các update bị bỏ qua (xem mục 7)
+  baseQueue: Update | null
+  queue: UpdateQueue | null // hàng đợi update (chỉ useState/useReducer/useActionState... có)
   next: Hook | null         // ⭐ hook TIẾP THEO trong cùng component
 }
 ```
@@ -258,6 +261,10 @@ Fiber(CartLine).memoizedState
 
 **Chú ý: không có tên nào cả.** Không có `"qtyState"`, không có `"rmState"`. Chỉ là **thứ tự trong
 linked list**.
+
+(Sơ đồ trên vẽ mỗi lời gọi là một node cho dễ nhìn. Thực tế một hook built-in có thể chiếm **nhiều**
+node: trong 19.2.4, `useActionState` tạo 3 node — state, cờ pending, hàng đợi action. Nguyên tắc
+không đổi: số node và thứ tự phải giống hệt giữa các render.)
 
 ### Cách React "khớp" hook giữa các lần render
 
@@ -297,15 +304,18 @@ Render 1 (showToast = true):     Render 2 (showToast = false):
   #3 = state b                     #3 = (không có)
 ```
 
-Ở render 2, `useState(2)` đọc vào slot của một `useEffect`. `memoizedState` của effect là một object
-`{ destroy, deps, tag }`, không phải số `2`. Nên `b` trở thành object đó.
+Ở render 2, `useState(2)` đọc vào slot của một `useEffect` — slot đó không có `queue`. React 19.2
+phản ứng theo đúng cơ chế này (các chuỗi lỗi dưới đây có nguyên văn trong `react-dom`):
 
-React phát hiện được và throw:
 ```
-Error: Rendered fewer hooks than expected. This may be caused by an accidental early return statement.
+Dev warning: React has detected a change in the order of Hooks called by Bad...
+             Previous render: useState, useEffect, useState / Next render: useState, useState
+Error:       Should have a queue. You are likely calling Hooks conditionally, which is not allowed.
 ```
 
-Nhưng trong các trường hợp phức tạp hơn, nó có thể **không** phát hiện được và bạn nhận giá trị rác.
+Nếu số hook thay đổi mà kiểu vẫn khớp, bạn nhận `Rendered fewer hooks than expected` hoặc
+`Rendered more hooks than during the previous render`. Không có lỗi nào nhắc tên biến — vì React
+**không biết tên**, nó chỉ biết slot thứ mấy.
 
 **Quy tắc 2: Không gọi hook sau `return` sớm.** Cùng lý do — số lần gọi thay đổi.
 
@@ -324,7 +334,8 @@ const [imagesState, imagesAction] = useActionState(addProductImagesAction, initi
 
 Hai `useActionState` → hai slot độc lập → hai state riêng. **Không xung đột.**
 
-Cùng lý do, custom hook gọi nhiều lần cũng ổn:
+Cùng lý do, custom hook gọi nhiều lần cũng ổn — ví dụ `useActionToast` (hook đề xuất trích ra ở file
+`03`, repo chưa có):
 
 ```tsx
 useActionToast(detailsState)    // effect ở slot #k
@@ -448,8 +459,16 @@ Ngay cả không có `key`, `elementType` khác (`'input'` vs `'textarea'`) làm
 **(c) Vì sao unmount = mất state** (file `02`, ca `discount_product_ids`). Fiber bị xoá khỏi cây →
 object fiber bị GC → linked list hook đi cùng nó.
 
-Và vì sao `<Activity mode="hidden">` giữ được state: fiber **vẫn ở trong cây**, chỉ bị đánh dấu là
-ẩn. `memoizedState` còn nguyên.
+Và vì sao `<Activity mode="hidden">` (stable từ React 19.2) giữ được state: fiber **vẫn ở trong cây**,
+chỉ bị đánh dấu là ẩn. `memoizedState` còn nguyên — nhưng effect của cây con **bị cleanup** (như
+unmount) và chạy lại setup khi hiện lại; update bên trong được xử lý ở `OffscreenLane` (thấp nhất).
+
+```tsx
+// Tab "Mô tả" / "Đánh giá" của trang sản phẩm: đổi tab không mất nội dung ô comment đang gõ dở
+<Activity mode={tab === 'reviews' ? 'visible' : 'hidden'}>
+  <CommentSection productId={id} />
+</Activity>
+```
 
 ---
 
@@ -457,19 +476,21 @@ Và vì sao `<Activity mode="hidden">` giữ được state: fiber **vẫn ở t
 
 ### Lane là một bitmask
 
-React biểu diễn ưu tiên bằng một số nguyên 31 bit, mỗi bit là một "lane":
+React biểu diễn ưu tiên bằng một số nguyên 31 bit, mỗi bit là một "lane". Giá trị trong
+`react-dom@19.2.4` (các bit `*Hydration*` xen giữa bị lược):
 
 ```js
-const NoLanes                = 0b0000000000000000000000000000000
-const SyncLane               = 0b0000000000000000000000000000010
-const InputContinuousLane    = 0b0000000000000000000000000001000
-const DefaultLane            = 0b0000000000000000000000000100000
-const TransitionLane1        = 0b0000000000000000000000010000000
-const TransitionLane2        = 0b0000000000000000000000100000000
-// ... 16 transition lanes
-const RetryLane1             = 0b0000010000000000000000000000000
-const IdleLane               = 0b0100000000000000000000000000000
-const OffscreenLane          = 0b1000000000000000000000000000000
+const NoLanes             = 0b0000000000000000000000000000000
+const SyncLane            = 0b0000000000000000000000000000010   // 2
+const InputContinuousLane = 0b0000000000000000000000000001000   // 8
+const DefaultLane         = 0b0000000000000000000000000100000   // 32
+const GestureLane         = 0b0000000000000000000000001000000   // 64 (gesture/View Transition)
+const TransitionLane1     = 0b0000000000000000000000100000000   // 256 … 14 transition lanes
+                                                                //   (10 cho update, 4 cho useDeferredValue)
+const RetryLane1          = 0b0000000010000000000000000000000   // 4194304 … 4 retry lanes
+const IdleLane            = 0b0010000000000000000000000000000
+const OffscreenLane       = 0b0100000000000000000000000000000
+const DeferredLane        = 0b1000000000000000000000000000000   // cờ đánh dấu, không phải ưu tiên
 ```
 
 **Vì sao bitmask mà không phải số nguyên đơn giản?** Vì một fiber có thể có **nhiều** update đang chờ ở
@@ -496,12 +517,12 @@ nghìn lần mỗi lần render.
 
 | Nguồn update | Lane | Ví dụ trong repo |
 | --- | --- | --- |
-| Discrete event (click, keydown, submit) | `SyncLane` | Bấm "Reply" → `setReplyOpen` |
+| Discrete event (click, keydown, submit) | `SyncLane` | `onSubmit={() => setCooldown(RESEND_COOLDOWN)}` (📄 `reset-otp-form.tsx`) |
 | Continuous event (mousemove, scroll, drag) | `InputContinuousLane` | — |
-| `setState` thường (trong effect, timeout, promise) | `DefaultLane` | `setUploadResult` từ effect của `ImageUploader` |
-| `startTransition` / form action | `TransitionLane*` | `<form action={formAction}>` |
+| `setState` ngoài event (timeout, promise, effect) | `DefaultLane` | `setTimeout(() => setCooldown((s) => s - 1), 1000)` (cùng file) |
+| `startTransition` / form action | `TransitionLane*` | `<form action={qtyAction}>` trong `CartLine` |
 | Suspense retry | `RetryLane*` | Comments stream xong |
-| `useDeferredValue` (phần trễ) | Transition lane | — |
+| `useDeferredValue` (phần trễ) | Transition lane (nhóm deferred) | — |
 | `<Activity mode="hidden">` | `OffscreenLane` | — |
 
 **Đây là lời giải thích ở tầng cơ chế cho cảnh báo ở file `07`:**
@@ -511,30 +532,41 @@ nghìn lần mỗi lần render.
 Vì `startTransition` **hạ** update từ `SyncLane` xuống `TransitionLane` — tức là bạn tự tay đưa cái
 gấp nhất vào làn chậm.
 
-Và nó cũng giải thích vì sao `<form action={serverAction}>` tự động cho bạn `isPending`: React bọc
-việc gọi action trong một transition lane, và `useFormStatus`/`useActionState` đọc trạng thái của lane đó.
+Và nó cũng giải thích vì sao `<form action={serverAction}>` tự động cho bạn `isPending`: React chạy
+action trong một transition, nhưng đặt `pending = true` như một update **ở lane gấp** (hiện ngay), còn
+`pending = false` đi **cùng transition** — nên spinner tắt đúng lúc kết quả action được commit, không
+sớm hơn.
 
 ### Work loop: chỗ "ngắt được" thực sự xảy ra
 
 ```js
-// Chế độ concurrent — CÓ THỂ NGẮT
+// CÓ THỂ NGẮT (tên trong 19.2: workLoopConcurrentByScheduler)
 function workLoopConcurrent() {
   while (workInProgress !== null && !shouldYield()) {
     performUnitOfWork(workInProgress)
   }
 }
 
-// Chế độ sync — KHÔNG NGẮT (dùng cho SyncLane)
+// KHÔNG NGẮT
 function workLoopSync() {
   while (workInProgress !== null) {
     performUnitOfWork(workInProgress)
   }
 }
+
+// Chọn vòng lặp nào — rút gọn từ performWorkOnRoot (19.2.4)
+const shouldTimeSlice = (lanes & 0b1111111) === 0 && (lanes & root.expiredLanes) === 0
+shouldTimeSlice ? renderRootConcurrent(root, lanes) : renderRootSync(root, lanes)
 ```
 
 **Toàn bộ concurrent rendering nằm ở `&& !shouldYield()`.** Một điều kiện, trong một vòng `while`.
 
-`shouldYield()` trả `true` khi time slice (~5ms) đã hết. Khi đó:
+⚠️ Chú ý điều kiện chọn: 7 bit thấp là Sync, InputContinuous, Default, Gesture (+ hydration). Nghĩa là
+**chỉ Transition, Retry, Idle, Offscreen mới được time-slice**. Một `setState` trong `setTimeout`
+(`DefaultLane`) vẫn render **liền một mạch**. Lane bị "đói" quá lâu sẽ thành `expiredLanes` và cũng bị
+render sync — transition không thể bị hoãn mãi mãi. Muốn render ngắt được → phải là transition.
+
+`shouldYield()` trả `true` khi time slice (`frameInterval = 5`ms trong Scheduler) đã hết. Khi đó:
 1. Vòng lặp thoát
 2. `workInProgress` **vẫn trỏ vào fiber đang xử lý** (đây là lý do fiber phải ở trên heap)
 3. React nhả main thread → browser xử lý input, paint, chạy các task khác
@@ -555,28 +587,35 @@ function schedulePerformWorkUntilDeadline() {
 cho `setTimeout` lồng nhau. Với time slice 5ms, mất 4ms cho mỗi lần schedule là không chấp nhận được.
 `postMessage` tạo một macrotask mà không bị clamp.
 
-**Vì sao không `requestIdleCallback`?** Vì nó chỉ chạy khi browser **rảnh** — có thể không bao giờ chạy
-nếu trang đang bận. React cần đảm bảo công việc *sẽ* tiến triển, chỉ là nhường chỗ cho việc gấp hơn.
+**Vì sao không `requestIdleCallback`?** Chỉ chạy khi browser **rảnh** — có thể không bao giờ chạy nếu
+trang bận. **Vì sao không `requestAnimationFrame`?** Gắn với nhịp paint (16.7ms), trong khi React muốn
+làm việc cả khi không cần paint. (Trên Node/SSR, Scheduler dùng `setImmediate`.)
 
-**Vì sao không `requestAnimationFrame`?** Vì rAF gắn với nhịp paint (16.7ms). React muốn làm việc cả
-khi không cần paint.
+### Update rebasing — vì sao nhảy lane mà state vẫn đúng
 
-### Lane entanglement — chi tiết tinh vi
-
-Nếu hai update ở hai lane khác nhau nhưng **cùng chạm vào một state**, React có thể phải "vướng"
-(entangle) chúng để không tạo ra trạng thái không nhất quán:
+Một queue có thể chứa update ở nhiều lane. Khi render ở lane gấp, React **bỏ qua** update lane thấp —
+nhưng không được làm mất thứ tự. Đó là việc của `baseState`/`baseQueue`:
 
 ```tsx
-// Nếu render với transition lane hoàn tất TRƯỚC sync update,
-// người dùng có thể thấy state mới của B với state cũ của A → không nhất quán
-startTransition(() => setFilter('x'))   // transition lane
-setCount(c => c + 1)                     // sync lane, nhưng liên quan tới cùng cây
+// qty = 1
+startTransition(() => setQty(q => q * 10))   // A — TransitionLane
+setQty(q => q + 1)                           // B — SyncLane (cùng event click)
 ```
 
-React theo dõi điều này và có thể nâng transition lane lên để xử lý cùng lượt.
+```
+Render 1 (SyncLane):        bỏ qua A (lane thấp) → áp B: 1 + 1 = 2   → màn hình: 2
+                            baseState = 1, baseQueue = [A, B]        ← giữ B lại vì nó đứng SAU A
+Render 2 (TransitionLane):  từ baseState = 1 áp lại A rồi B: (1 × 10) + 1 = 11   → màn hình: 11
+```
 
-**Ý nghĩa thực tế cho bạn:** đây là lý do bạn **không nên** dựa vào "transition chắc chắn hoàn thành
-sau sync". Đừng viết logic phụ thuộc vào thứ tự hoàn tất của các lane.
+Kết quả cuối **giống hệt** khi chạy tuần tự A rồi B — người dùng chỉ thấy thêm một trạng thái trung gian
+(`2`). Đây là lý do updater function phải pure: **nó có thể chạy nhiều lần**.
+
+**Entanglement** là cơ chế bổ sung: các transition cập nhật cùng một queue (hoặc cùng `useOptimistic`)
+được "buộc" vào nhau để commit cùng lượt, tránh lộ trạng thái nửa vời.
+
+**Ý nghĩa thực tế:** đừng viết logic dựa vào "transition xong sau sync update" hay "updater chạy đúng
+một lần".
 
 ---
 
@@ -622,8 +661,9 @@ function beginWork(current, workInProgress, renderLanes) {
     const oldProps = current.memoizedProps
     const newProps = workInProgress.pendingProps
 
-    if (oldProps === newProps && !hasContextChanged()) {
-      // props IDENTICAL (===) và không có update đang chờ trên fiber này
+    if (oldProps === newProps) {
+      // props IDENTICAL (===) và không có update đang chờ trên fiber này.
+      // Context đổi? Provider đã đánh dấu lanes lên fiber consumer → check dưới sẽ fail.
       if (!includesSomeLane(renderLanes, workInProgress.lanes)) {
         // ⭐ BAILOUT: bỏ qua fiber này
         return bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes)
@@ -651,20 +691,44 @@ if (!includesSomeLane(renderLanes, workInProgress.childLanes)) {
 - `childLanes` là lý do bailout có thể bỏ qua **cả cây con** trong một phép AND. Nếu không có update
   nào ở dưới, không cần duyệt xuống.
 
-**Và đây cũng là lời giải thích cho "hằng số ở tầng module":**
+**Và đây cũng là lời giải thích cho "hằng số ở tầng module":** array khai báo trong component là
+reference mới mỗi render → truyền làm prop là phá bailout. 📄 `components/seller/nav-items.ts` giữ
+`NAV_ITEMS` ở tầng module, và `SellerSidebar` **import** nó thay vì nhận qua prop — vấn đề reference
+thậm chí không phát sinh.
+
+### React Compiler 1.0 — tự động tạo điều kiện cho bailout
+
+React Compiler (stable 1.0 từ 10/2025; Next 16 bật bằng `reactCompiler: true` trong `next.config.ts` +
+cài `babel-plugin-react-compiler` — **repo này chưa bật**) không thêm cơ chế mới vào reconciler. Nó
+viết lại component để **giữ nguyên reference** giữa các render, nhờ đó `oldProps === newProps` ở trên
+đúng thường xuyên hơn:
 
 ```tsx
-// Ở tầng module: NAV_ITEMS luôn là CÙNG một reference
-export const NAV_ITEMS: SellerNavItem[] = [...]
+// Bạn viết
+function ProductCard({ product }: { product: Product }) {
+  return <Card title={product.product_name} tags={['new']} />
+}
 
-// Trong component: array MỚI mỗi render → nếu truyền làm prop, phá bailout
-function Bad() {
-  const items = [...]
+// Compiler sinh ra (rút gọn)
+import { c as _c } from 'react/compiler-runtime'
+function ProductCard({ product }) {
+  const $ = _c(2)                        // ⭐ MỘT hook slot chứa mảng cache
+  let t0
+  if ($[0] !== product.product_name) {
+    t0 = <Card title={product.product_name} tags={['new']} />
+    $[0] = product.product_name
+    $[1] = t0
+  } else {
+    t0 = $[1]                            // cùng element → Card bailout, không cần memo()
+  }
+  return t0
 }
 ```
 
-📄 `components/seller/nav-items.ts` giữ nó ở tầng module — và `SellerSidebar` **import** nó thay vì
-nhận qua prop, nên vấn đề reference thậm chí không phát sinh.
+Nhìn bằng con mắt internals: `_c(n)` (`useMemoCache`) chỉ là **một node nữa trong hook linked list** —
+Rules of Hooks vẫn y nguyên. Compiler cũng *cần* render pure: nó giả định cùng input → cùng output.
+Code mutate props (như `items.sort()` ở mục 4) mà nó phát hiện được thì component đó bị bỏ qua (không
+tối ưu, ESLint `react-hooks` báo); không phát hiện được thì cache trả kết quả cũ — bug khó tìm.
 
 ---
 
@@ -672,9 +736,19 @@ nhận qua prop, nên vấn đề reference thậm chí không phát sinh.
 
 Nhớ lại file `01`: StrictMode gọi component hai lần và chạy effect `setup → cleanup → setup`.
 
-**Ở mức internals:** React chạy `renderWithHooks` hai lần, nhưng lần thứ hai dùng
-`HooksDispatcherOnMountInDEV` với các hook đã được reset. Mục đích là **so sánh**: nếu hai lần render
-cho ra kết quả khác nhau, component không pure.
+**Ở mức internals:** React gọi hàm component lần thứ hai ngay sau lần đầu (`renderWithHooksAgain`) và
+dùng một kết quả. React **không so sánh** hai kết quả — mục đích là làm side-effect lộ ra *cho bạn
+thấy* (log in hai lần, mutate hai lần → `items.sort()` sắp hai lần, counter `++` nhảy 2). Từ React 19,
+lần gọi thứ hai **tái dùng** kết quả `useMemo`/`useCallback` của lần đầu, và ref callback cũng được
+gọi `setup → cleanup → setup` khi mount.
+
+```tsx
+let renders = 0
+function CartBadge({ count }: { count: number }) {
+  renders++                  // ❌ side-effect trong render: StrictMode làm nó tăng 2 mỗi lần
+  return <span>{count}</span>
+}
+```
 
 Với effect, React thực sự thực hiện một chu kỳ mount/unmount/mount đầy đủ trên cây — mô phỏng điều
 sẽ xảy ra khi `<Activity>` ẩn rồi hiện lại một cây, hoặc khi Suspense re-mount một boundary.
@@ -770,13 +844,15 @@ let h = fiber.memoizedState, i = 0
 while (h) { console.log(`hook #${++i}`, h.memoizedState); h = h.next }
 ```
 
-Bạn sẽ thấy đúng 4 hook (2 `useActionState`, 2 `useEffect`) theo đúng thứ tự trong code.
+Bạn sẽ thấy **8 node** theo đúng thứ tự trong code: 3 + 3 cho hai `useActionState` (state, pending,
+action queue) rồi 2 node effect (`memoizedState` là object `{ tag, create, deps, ... }`).
 
 **Công cụ khác:**
-- **React DevTools → Profiler** → bật "Record why each component rendered" → thấy được lane và
-  nguyên nhân render
-- **Chrome DevTools → Performance** → React 19.2 thêm **Performance Tracks** hiển thị lane và
-  scheduler ngay trên timeline
+- **React DevTools → Profiler** → bật "Record why each component rendered while profiling" → thấy
+  nguyên nhân mỗi lần render (props/state/hook nào đổi)
+- **Chrome DevTools → Performance** → React 19.2 thêm **Performance Tracks**: track *Scheduler* chia
+  công việc theo nhóm ưu tiên (Blocking, Transition, Suspense, Idle) và track *Components* hiển thị
+  thời gian render/effect của từng component ngay trên timeline
 - Đọc source: `packages/react-reconciler/src/ReactFiberWorkLoop.js` và `ReactFiberHooks.js`
 
 ---
@@ -799,31 +875,17 @@ Components, Suspense, và `useOptimistic` đơn giản là không thể tồn t�
 
 ## 13. Best Practices rút ra từ internals
 
-1. **Render pure không phải "phong cách tốt" — nó là hợp đồng với reconciler.** Cây `workInProgress`
-   có thể bị vứt bất cứ lúc nào. Mutate dữ liệu mà `current` đang dùng = trạng thái không hồi phục.
-
-2. **`key` phải gắn với danh tính dữ liệu, không phải vị trí.** `key={o._id}`, không `key={index}`.
-   Vì `key` quyết định fiber được tái dùng hay bị xoá, và fiber mang theo toàn bộ hook list.
-
-3. **Đừng đổi `type` của element có điều kiện ở cùng vị trí** nếu bạn muốn giữ state/focus/scroll.
-   `elementType` khác = fiber mới.
-
-4. **Hook order là bất biến, không phải quy ước.** Không có tên nào để khớp — chỉ có thứ tự.
-
-5. **Gọi cùng hook nhiều lần là hoàn toàn ổn.** Mỗi lần gọi là một slot. `useActionToast(a)` +
-   `useActionToast(b)` hoạt động đúng theo thiết kế.
-
-6. **Dùng updater function khi giá trị mới phụ thuộc giá trị cũ** — vì reducer nhận state đã tích lũy
-   từ queue, còn giá trị trực tiếp thì không.
-
-7. **Giữ hằng số ở tầng module** để `oldProps === newProps` có cơ hội đúng và bailout hoạt động.
-
-8. **Đừng hạ ưu tiên của input.** `SyncLane` tồn tại cho một lý do.
-
-9. **Đừng dựa vào thứ tự hoàn tất giữa các lane.** Lane entanglement có thể đổi thứ tự bạn mong đợi.
-
-10. **Giữ StrictMode bật.** Nó mô phỏng những chu kỳ mount/unmount thật sự xảy ra trong concurrent
-    rendering — không phải một bài test nhân tạo.
+| Quy tắc | Lý do ở tầng internals |
+| --- | --- |
+| Render pure, không mutate props/state | Cây WIP có thể bị vứt; updater có thể chạy lại khi rebase; Compiler cache theo input |
+| `key={o._id}`, không `key={index}` | `key` quyết định fiber tái dùng hay xoá — fiber mang theo hook list |
+| Không đổi `type` element có điều kiện ở cùng vị trí | `elementType` khác = fiber mới = mất state/focus/scroll |
+| Hook không trong `if`/loop/sau `return` | Khớp hook bằng thứ tự slot, không có tên |
+| Updater function khi giá trị mới phụ thuộc giá trị cũ | Reducer nhận state đã tích luỹ từ queue |
+| Hằng số ở tầng module (hoặc bật React Compiler) | Để `oldProps === newProps` và bailout hoạt động |
+| Không bọc `setState` của input trong `startTransition` | Hạ từ `SyncLane` xuống lane bị time-slice |
+| Không dựa vào thứ tự hoàn tất giữa các lane | Rebasing/entanglement có thể đổi thứ tự bạn mong đợi |
+| Giữ StrictMode bật | Mô phỏng chu kỳ mount/unmount thật (`<Activity>`, Suspense) |
 
 ---
 
@@ -835,9 +897,11 @@ Components, Suspense, và `useOptimistic` đơn giản là không thể tồn t�
 4. Giải thích ở tầng internals vì sao `useEffect` trong `if` gây bug. Bug đó biểu hiện thế nào?
 5. Vì sao đổi `key` reset state? Field nào trên fiber chịu trách nhiệm?
 6. Vì sao lane là bitmask mà không phải số nguyên đơn giản? Kể hai phép toán nó cho phép.
-7. Toàn bộ "concurrent rendering" nằm ở đoạn code nào trong work loop?
+7. Toàn bộ "concurrent rendering" nằm ở đoạn code nào trong work loop? Một `setState` trong
+   `setTimeout` có được time-slice không? Vì sao?
 8. Vì sao scheduler dùng `MessageChannel` chứ không `setTimeout` hay `requestIdleCallback`?
 9. `childLanes` giúp bailout làm được gì mà `lanes` một mình không làm được?
 10. Vì sao Server Component không thể có `useState`? (Trả lời ở tầng cơ chế, không phải "vì nó chạy trên server")
+11. React Compiler giúp bailout bằng cách nào? Nó chiếm bao nhiêu slot trong hook list?
 
 ➡️ Tiếp theo: `16-error-boundaries-va-resilience.md`

@@ -9,12 +9,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
-export function LoginForm({ redirectTo }: { redirectTo: string }) {
+export function LoginForm({ redirectTo, justReset }: { redirectTo: string; justReset?: boolean }) {
   const [state, formAction] = useActionState(loginAction, initialActionState)
 
   useEffect(() => {
     if (state.message) toast.error(state.message)
   }, [state])
+
+  useEffect(() => {
+    if (justReset) toast.success('Password updated. Please sign in.')
+  }, [justReset])
 
   return (
     <Card>
@@ -30,7 +34,12 @@ export function LoginForm({ redirectTo }: { redirectTo: string }) {
             <Input id="email" name="email" type="email" required autoComplete="email" />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password">Password</Label>
+              <Link href="/forgot-password" className="text-sm font-medium text-primary hover:underline">
+                Forgot password?
+              </Link>
+            </div>
             <Input id="password" name="password" type="password" required autoComplete="current-password" />
           </div>
           <SubmitButton>Sign in</SubmitButton>

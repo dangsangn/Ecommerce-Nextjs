@@ -1,7 +1,8 @@
 import 'server-only'
-import { cookies } from 'next/headers'
+import { cookies, headers as requestHeaders } from 'next/headers'
 import { COOKIE } from '@/lib/auth/tokens'
 import { ApiError, buildHeaders, unwrap, type SessionHeaders } from '@/lib/api/http'
+import { pickClientIp } from '@/lib/api/client-ip'
 
 export interface FetchOptions {
   method?: string
@@ -19,6 +20,16 @@ function baseUrl(): string {
   return `${url}/api/v1`
 }
 
+async function currentClientIp(): Promise<string | undefined> {
+  try {
+    const h = await requestHeaders()
+    return pickClientIp(h.get('x-forwarded-for'), Number(process.env.TRUST_PROXY ?? 0))
+  } catch {
+    // Outside a request (build, scripts) there is no end user to report.
+    return undefined
+  }
+}
+
 export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
   let session: SessionHeaders | undefined
   if (opts.auth) {
@@ -30,7 +41,12 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   }
 
   const json = !opts.multipart && opts.body !== undefined
-  const headers = buildHeaders({ apiKey: process.env.API_KEY!, json, session })
+  const headers = buildHeaders({
+    apiKey: process.env.API_KEY!,
+    json,
+    session,
+    clientIp: await currentClientIp(),
+  })
 
   const method = opts.method ?? (opts.body !== undefined || opts.multipart ? 'POST' : 'GET')
   const res = await fetch(`${baseUrl()}${path}`, {

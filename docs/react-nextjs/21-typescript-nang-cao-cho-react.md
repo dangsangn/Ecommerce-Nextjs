@@ -7,81 +7,104 @@
 
 ## 1. Overview
 
-### Hai cách dùng TypeScript
+Có hai cách dùng TypeScript: **như linter** (thêm type để autocomplete, bắt typo) và **như công cụ mô
+hình hoá** (thiết kế kiểu trước để trạng thái/phép gán sai **không biểu diễn được**). Chương này về cách 2,
+cộng với những thay đổi type bắt buộc phải biết của **React 19** và **Next.js 16**.
 
-**Cách 1 — như một linter:** viết code JavaScript, thêm type để IDE autocomplete và bắt typo.
-Đây là cách phần lớn dự án dùng. Nó có giá trị, nhưng hạn chế.
-
-**Cách 2 — như một công cụ mô hình hoá:** thiết kế **kiểu trước**, để kiểu **loại bỏ** những trạng thái
-và phép gán không hợp lệ. Bug không bị "bắt" — nó **không tồn tại**.
-
-Chương này về cách 2.
-
-### Repo này đang ở đâu
-
-📄 `tsconfig.json` có `"strict": true` — nền tảng tốt. Và có nhiều chỗ dùng type khá tinh:
-
-```tsx
-// types/order.ts — derive type từ VALUE, một nguồn sự thật
-export const ORDER_STATUSES = ['pending', 'confirmed', 'shipping', 'delivered', 'cancelled', 'failed'] as const
-export type OrderStatus = (typeof ORDER_STATUSES)[number]
-```
-
-```tsx
-// lib/validations/product.ts — discriminated union mã hoá luật nghiệp vụ
-export const productDetailsSchema = z.discriminatedUnion('product_type', [clothing, electronics])
-export type ProductDetailsInput = z.infer<typeof productDetailsSchema>
-```
-
-```tsx
-// types/product.ts — union cho dữ liệu backend nhiều hình dạng
-export type Decimal = number | string | { $numberDecimal: string }
-```
-
-**Nhưng có một class bug lớn mà type hiện tại không chặn.** Đó là chỗ chương này bắt đầu.
+📄 Repo đã có nền tốt: `tsconfig.json` bật `"strict": true`, `types/order.ts` derive `OrderStatus` từ
+array `as const`, `lib/validations/product.ts` dùng `z.discriminatedUnion`. **Nhưng có một class bug lớn
+mà type hiện tại không chặn** — đó là chỗ chương này bắt đầu.
 
 ---
 
-## 2. ⭐ Branded Types — bug ID mà repo đang mở cửa cho
+## 2. ⭐ Type của React 19 và Next.js 16 — những gì đã đổi
+
+### React 19 (`@types/react@19`)
+
+```tsx
+// (1) Namespace JSX global đã bị bỏ → dùng React.JSX
+function Icon(): JSX.Element { }          // ❌ "Cannot find namespace 'JSX'"
+function Icon(): React.JSX.Element { }    // ✅ (hoặc để TS tự suy ra — thường là tốt nhất)
+
+// (2) useRef BẮT BUỘC có đối số
+const inputRef = useRef<HTMLInputElement>()       // ❌ lỗi: Expected 1 argument
+const inputRef = useRef<HTMLInputElement>(null)   // ✅ RefObject<HTMLInputElement | null>
+// ref.current giờ luôn mutable — không còn phân biệt MutableRefObject / RefObject "readonly"
+
+// (3) ref là prop thường — không cần forwardRef cho function component
+// ❌ Kiểu cũ
+const SearchInput = forwardRef<HTMLInputElement, Props>((props, ref) => <input ref={ref} {...props} />)
+// ✅ React 19
+function SearchInput({ ref, ...props }: React.ComponentProps<'input'>) {
+  return <input ref={ref} {...props} />
+}
+
+// (4) Callback ref không được trả về giá trị ngầm (vì giờ ref có thể trả về cleanup function)
+<div ref={(el) => (cardRef.current = el)} />     // ❌ lỗi type: arrow trả về el
+<div ref={(el) => { cardRef.current = el }} />   // ✅
+```
+
+Thêm: `ReactElement` có `props` mặc định là `unknown` (không còn `any`); `useReducer` infer từ reducer,
+không nên truyền generic tay. Codemod: `npx types-react-codemod@latest preset-19 ./`.
+
+### Next.js 16 — type route được sinh tự động
+
+`next dev` / `next build` / **`next typegen`** sinh ra các helper **global** (không cần import) từ cấu
+trúc thư mục `app/`:
+
+```tsx
+// app/(store)/orders/[id]/page.tsx — route group (store) bị bỏ khỏi đường dẫn
+export default async function OrderDetailPage(props: PageProps<'/orders/[id]'>) {
+  const { id } = await props.params          // id: string — đã được type theo [id]
+  const sp = await props.searchParams        // Record<string, string | string[] | undefined>
+}
+
+// app/(seller)/seller/layout.tsx — children + named slots (@analytics...) đều được type
+export default function SellerLayout(props: LayoutProps<'/seller'>) {
+  return <section>{props.children}</section>
+}
+
+// Route Handler (repo chưa có — ví dụ nếu thêm app/api/products/[id]/route.ts)
+export async function GET(_req: NextRequest, ctx: RouteContext<'/api/products/[id]'>) {
+  const { id } = await ctx.params
+}
+```
+
+Gõ sai literal (`PageProps<'/order/[id]'>`) → lỗi compile, vì route đó không tồn tại.
+
+**Typed links** (`typedRoutes: true` — đã stable ở top-level config, không còn `experimental`):
+
+```ts
+// next.config.ts
+const nextConfig: NextConfig = { typedRoutes: true }
+```
+
+```tsx
+import type { Route } from 'next'
+
+<Link href="/products/abc" />            // ✅ literal và template literal đều được kiểm tra
+<Link href="/prodcuts" />                // ❌ lỗi compile — route không tồn tại
+router.push(`/orders/${orderId}`)        // ✅ next/navigation cũng được type
+<Link href={('/seller/' + tab) as Route} /> // chuỗi ghép động → phải cast `as Route`
+```
+
+⚠️ **CI:** `tsc --noEmit` trên máy sạch sẽ không thấy `PageProps`/`Route` vì `.next/types` chưa tồn tại.
+Script `typecheck` của repo nên là `next typegen && tsc --noEmit`.
+
+---
+
+## 3. ⭐ Branded Types — bug ID mà repo đang mở cửa cho
 
 ### Vấn đề
 
-Đếm số kiểu ID trong repo, **tất cả đều là `string`**:
+Mọi ID trong repo (`Product._id`, `Order._id`, `OrderProduct.productId`, `Comment.id/userId/parentId`,
+`JwtPayload.userId`...) **đều là `string`**. Nên các phép gán sai này đều compile:
 
 ```tsx
-// types/product.ts
-export interface Product { _id: string; /* ... */ }
-
-// types/order.ts
-export interface Order { _id: string; /* ... */ }
-export interface OrderProduct { productId: string; /* ... */ }
-export interface ShopOrderItem { shopId: string; /* ... */ }
-
-// types/comment.ts
-export interface Comment {
-  id: string
-  productId: string
-  userId: string
-  parentId: string | null
-  replyToUserId: string | null
-}
-
-// types/api.ts
-export interface JwtPayload { userId: string; /* ... */ }
-```
-
-**Nghĩa là mọi phép gán sau đây compile được:**
-
-```tsx
-// Trong app/(store)/orders/[id]/page.tsx
-const order = await apiFetch<Order>(`/order/${id}`, { auth: true })
-const products = order.order_products.flatMap((s) => s.item_products)
-
 // ❌ TẤT CẢ compile OK, tất cả đều SAI:
 await apiFetch<Product>(`/product/${order._id}`)              // order ID vào endpoint product
 <CancelOrderButton orderId={products[0].productId} />          // product ID vào chỗ cần order ID
 <CommentForm productId={order._id} />                          // order ID vào chỗ cần product ID
-deleteCommentAction(fd)  // với commentId = userId
 ```
 
 **Đây không phải bug giả định.** Xem `components/store/comment-section.tsx`:
@@ -94,8 +117,7 @@ function DeleteButton({ commentId, productId }: { commentId: string; productId: 
 ```
 
 Hai tham số **cùng kiểu**, cạnh nhau. Gọi `<DeleteButton commentId={productId} productId={commentId} />`
-compile hoàn hảo. Bug chỉ lộ ra ở runtime, dưới dạng "không xoá được comment" — và bạn sẽ đi debug
-backend trước khi nghĩ tới việc hai tham số bị đổi chỗ.
+compile hoàn hảo; bug chỉ lộ ra ở runtime dưới dạng "không xoá được comment".
 
 ### Giải pháp: Branded (Nominal) Types
 
@@ -150,31 +172,13 @@ export const ShopId = makeId('ShopId')
 ### Áp dụng vào types
 
 ```tsx
-// types/product.ts
-import type { ProductId, ShopId } from '@/types/ids'
-
-export interface Product {
-  _id: ProductId              // ← không còn là string trần
-  product_name: string
-  product_shop?: ShopId
-  // ...
-}
-```
-
-```tsx
 // types/comment.ts
-import type { CommentId, ProductId, UserId } from '@/types/ids'
-
 export interface Comment {
   id: CommentId
   productId: ProductId
   userId: UserId
-  content: string
   parentId: CommentId | null       // ← reply trỏ tới CommentId, không phải string bất kỳ
-  replyToUserId: UserId | null
-  user?: CommentAuthor
-  replyToUser?: CommentAuthor
-  createdAt?: string
+  // ...
 }
 ```
 
@@ -205,12 +209,8 @@ Branded type chỉ có giá trị nếu bạn kiểm soát được **điểm v�
 import { notFound } from 'next/navigation'
 import { OrderId } from '@/types/ids'
 
-export default async function OrderDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>          // Next.js cho string — không tránh được
-}) {
-  const { id } = await params
+export default async function OrderDetailPage(props: PageProps<'/orders/[id]'>) {
+  const { id } = await props.params        // Next.js cho string — không tránh được
   const orderId = OrderId.safeParse(id)
   if (!orderId) notFound()                 // ⭐ ID sai hình dạng → 404 ngay, không gọi API
 
@@ -219,8 +219,7 @@ export default async function OrderDetailPage({
 }
 ```
 
-**Điểm cộng ngoài dự kiến:** bạn vừa được **validate miễn phí**. Trước đó, `/orders/abc` (ID sai) sẽ
-gọi API rồi nhận lỗi. Giờ nó trả 404 ngay, không tốn round-trip.
+**Điểm cộng ngoài dự kiến:** validate miễn phí — `/orders/abc` trả 404 ngay, không tốn round-trip API.
 
 **(2) Từ `FormData` trong Server Action:**
 
@@ -229,38 +228,19 @@ gọi API rồi nhận lỗi. Giờ nó trả 404 ngay, không tốn round-trip.
 import { CommentId, ProductId } from '@/types/ids'
 
 export async function deleteCommentAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  // ❌ TRƯỚC: String(formData.get('commentId') ?? '') — chỉ kiểm tra "có tồn tại"
   const commentId = CommentId.safeParse(formData.get('commentId'))
   const productId = ProductId.safeParse(formData.get('productId'))
   if (!commentId || !productId) return { ok: false, message: 'Missing comment' }
-
-  try {
-    await apiFetch('/comment', { method: 'DELETE', auth: true, body: { commentId, productId } })
-  } catch (e) {
-    return { ok: false, message: errorMessage(e, 'Could not delete the comment') }
-  }
-  revalidatePath(`/products/${productId}`)
-  return { ok: true, message: 'Comment deleted' }
+  // ...gọi API, revalidatePath(`/products/${productId}`)
 }
 ```
 
-So sánh với bản gốc:
+Bản gốc nhận `commentId = "'; DROP TABLE"` và gửi lên backend; bản mới từ chối ngay.
+**Branded type biến validate thành bắt buộc** — không thể có `CommentId` mà không qua `safeParse`.
 
-```tsx
-// TRƯỚC — chỉ kiểm tra "có tồn tại"
-const commentId = String(formData.get('commentId') ?? '')
-const productId = String(formData.get('productId') ?? '')
-if (!commentId || !productId) return { ok: false, message: 'Missing comment' }
-```
-
-Bản gốc nhận `commentId = "'; DROP TABLE"` và gửi lên backend. Bản mới từ chối ngay.
-**Branded type biến việc validate thành bắt buộc** — bạn không thể có `CommentId` mà không đi qua
-`safeParse`.
-
-**(3) Từ response của API** — dùng `parse` (throw) vì bạn tin backend:
-
-```tsx
-// Nếu muốn chặt chẽ hoàn toàn, validate cả response bằng Zod (xem mục 6)
-```
+**(3) Từ response của API** — dùng `parse` (throw) vì bạn tin backend, hoặc validate cả response bằng
+Zod (mục 7).
 
 ⚖️ **Trade-off thật của branded types:**
 
@@ -278,7 +258,7 @@ Repo này có 6 loại ID và `DeleteButton({ commentId, productId })` là ví d
 
 ---
 
-## 3. Derive type từ value — một nguồn sự thật
+## 4. Derive type từ value — một nguồn sự thật
 
 📄 Repo làm đúng ở hai chỗ:
 
@@ -356,20 +336,12 @@ export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
 // checkout-wizard.tsx
 const [method, setMethod] = useState<PaymentMethod>('COD')
 // ...
-<Select value={method} onValueChange={(v) => setMethod(v as PaymentMethod)}>
-  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-  <SelectContent>
-    {PAYMENT_METHODS.map((m) => (
-      <SelectItem key={m} value={m}>{PAYMENT_LABELS[m]}</SelectItem>
-    ))}
-  </SelectContent>
-</Select>
+{PAYMENT_METHODS.map((m) => (
+  <SelectItem key={m} value={m}>{PAYMENT_LABELS[m]}</SelectItem>
+))}
 ```
 
-**Ba lợi ích cùng lúc:**
-- Thêm phương thức mới = sửa **một** array; `Record` bắt buộc bạn thêm nhãn (không quên được)
-- Không hardcode 3 `<SelectItem>` — không lệch với backend
-- `setMethod('BITCOIN')` → lỗi compile
+Thêm phương thức = sửa **một** array; `Record` bắt buộc thêm nhãn; `setMethod('BITCOIN')` → lỗi compile.
 
 📄 **Cùng vấn đề ở `statusVariant`** — `lib/orders/display.ts`:
 
@@ -393,10 +365,6 @@ import { assertNever } from '@/lib/type-utils'
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive'
 
-/**
- * Map trạng thái đơn hàng sang Badge variant.
- * Dùng switch với assertNever để TypeScript bắt lỗi khi thêm status mới.
- */
 export function statusVariant(status: OrderStatus): BadgeVariant {
   switch (status) {
     case 'cancelled':
@@ -414,9 +382,8 @@ export function statusVariant(status: OrderStatus): BadgeVariant {
 }
 ```
 
-Nếu ai đó thêm `'refunded'` vào `ORDER_STATUSES`, TypeScript báo lỗi ngay tại `assertNever` —
-buộc họ quyết định badge nào cho trạng thái đó. Với `if/return 'secondary'` mặc định, `refunded` âm
-thầm hiện màu xám và không ai để ý.
+Thêm `'refunded'` vào `ORDER_STATUSES` → lỗi compile tại `assertNever`, buộc quyết định badge cho nó.
+Với `return 'secondary'` mặc định, `refunded` âm thầm hiện màu xám.
 
 ```tsx
 // lib/type-utils.ts
@@ -427,7 +394,7 @@ export function assertNever(x: never): never {
 
 ---
 
-## 4. Discriminated Union — công cụ mạnh nhất
+## 5. Discriminated Union — công cụ mạnh nhất
 
 ### Nguyên tắc
 
@@ -441,11 +408,8 @@ const clothing = z.object({
   ...baseFields,
   product_type: z.literal('CLOTHING'),      // ← discriminant
   brand: z.string().trim().min(1, 'Enter a brand'),
-  color: z.string().trim().min(1, 'Enter a color'),
-  size: z.string().trim().min(1, 'Enter a size'),
-  material: z.string().trim().optional(),
+  color: ..., size: ..., material: z.string().trim().optional(),
 })
-
 const electronics = z.object({
   ...baseFields,
   product_type: z.literal('ELECTRONICS'),
@@ -479,19 +443,8 @@ const ATTRIBUTE_KEYS = ['brand', 'color', 'size', 'material', 'manufacturer', 'm
 export function splitAttributes(data: ProductDetailsInput) {
   const record = data as Record<string, unknown>      // ⚠️ CAST — mất hết type safety
   const attrs: Record<string, unknown> = {}
-  for (const k of ATTRIBUTE_KEYS) {
-    if (k in record && record[k] !== undefined && record[k] !== '') {
-      attrs[k] = record[k]
-    }
-  }
-  return {
-    product_name: data.product_name,
-    product_price: data.product_price,
-    product_quantity: data.product_quantity,
-    product_description: data.product_description,
-    product_type: data.product_type,
-    product_attributes: attrs,                         // ⚠️ Record<string, unknown>
-  }
+  for (const k of ATTRIBUTE_KEYS) { /* copy field khác undefined/'' */ }
+  return { product_name: data.product_name, /* ... */ product_attributes: attrs }  // ⚠️ Record<string, unknown>
 }
 ```
 
@@ -520,40 +473,22 @@ function compact<T extends object>(o: T): Partial<T> {
   ) as Partial<T>
 }
 
-export function splitAttributes(data: ProductDetailsInput): {
-  product_name: string
-  product_price: number
-  product_quantity: number
-  product_description?: string
-  product_type: ProductType
-  product_attributes: Partial<ProductAttributes>
-} {
-  const base = {
-    product_name: data.product_name,
-    product_price: data.product_price,
-    product_quantity: data.product_quantity,
-    product_description: data.product_description,
-    product_type: data.product_type,
-  }
+export function splitAttributes(data: ProductDetailsInput) {
+  const { product_name, product_price, product_quantity, product_description, product_type } = data
+  const base = { product_name, product_price, product_quantity, product_description, product_type }
 
   switch (data.product_type) {
     case 'CLOTHING':
       return {
         ...base,
         product_attributes: compact<ClothingAttributes>({
-          brand: data.brand,          // ✅ TS biết các field này tồn tại
-          color: data.color,
-          size: data.size,
-          material: data.material,
+          brand: data.brand, color: data.color, size: data.size, material: data.material,  // ✅ type-safe
         }),
       }
     case 'ELECTRONICS':
       return {
         ...base,
-        product_attributes: compact<ElectronicsAttributes>({
-          manufacturer: data.manufacturer,
-          model: data.model,
-        }),
+        product_attributes: compact<ElectronicsAttributes>({ manufacturer: data.manufacturer, model: data.model }),
       }
     default:
       return assertNever(data)        // ⭐ thêm loại sản phẩm mới → lỗi compile
@@ -561,13 +496,9 @@ export function splitAttributes(data: ProductDetailsInput): {
 }
 ```
 
-Dài hơn 10 dòng, nhưng đổi lại:
-- **Không có cast nào** — mọi field được truy cập type-safe
-- `ATTRIBUTE_KEYS` (một array phải bảo trì tay) **biến mất**
-- Thêm `SHOES` vào schema → `assertNever` báo lỗi → bạn buộc phải xử lý
+Không cast, `ATTRIBUTE_KEYS` (array bảo trì tay) biến mất, thêm `SHOES` → `assertNever` chỉ đúng chỗ sửa.
 
-⚖️ **Có đáng?** Nếu bạn dự định thêm loại sản phẩm — **có**, vì `assertNever` sẽ chỉ đúng chỗ cần sửa.
-Nếu chỉ mãi 2 loại — bản gốc chấp nhận được. Nhớ file `17`: đừng abstract chỉ để đẹp.
+⚖️ **Có đáng?** Nếu sẽ thêm loại sản phẩm — **có**. Nếu mãi chỉ 2 loại — bản gốc chấp nhận được (file `17`).
 
 ### Áp dụng: `ActionState` như discriminated union
 
@@ -583,11 +514,6 @@ export type ActionState<TData = never> =
   | { status: 'error'; message: string; fieldErrors?: FieldErrors }
 
 export const initialActionState: ActionState = { status: 'idle' }
-
-/** Type guard tiện dụng cho JSX. */
-export function isError<T>(s: ActionState<T>): s is Extract<ActionState<T>, { status: 'error' }> {
-  return s.status === 'error'
-}
 ```
 
 Lợi ích cụ thể so với `{ ok: boolean; message?: string }`:
@@ -605,42 +531,19 @@ if (state.status === 'error') toast.error(state.message)
 Và `status: 'idle'` giải quyết vấn đề "không phân biệt được chưa-chạy với đã-chạy-và-lỗi" —
 điều mà `{ ok: false }` không làm được.
 
-**Với `data`:**
+**Với `data`** — `lookupDiscountByCodeAction` trả `Promise<ActionState<Discount>>`, và JSX narrow tự nhiên:
 
 ```tsx
-// actions/discount.actions.ts
-export async function lookupDiscountByCodeAction(
-  _prev: ActionState<Discount>,
-  formData: FormData,
-): Promise<ActionState<Discount>> {
-  const code = String(formData.get('code') ?? '').trim()
-  if (!code) return { status: 'error', message: 'Enter a discount code' }
-  try {
-    const data = await apiFetch<Discount>(`/discount/code/${encodeURIComponent(code)}`)
-    return { status: 'success', data }
-  } catch (e) {
-    return { status: 'error', message: errorMessage(e, 'No usable discount for that code') }
-  }
-}
-```
-
-```tsx
-// discount-code-lookup.tsx — narrow tự nhiên, không cần `state.ok && state.data`
-{state.status === 'success' && state.data ? (
-  <div className="rounded-md border p-3 text-sm">
-    <p className="font-medium">{state.data.discount_name}</p>
-  </div>
-) : null}
-{state.status === 'error' ? (
-  <p role="alert" className="text-sm text-destructive">{state.message}</p>
-) : null}
+// discount-code-lookup.tsx — không cần `state.ok && state.data`
+{state.status === 'success' && state.data && <p className="font-medium">{state.data.discount_name}</p>}
+{state.status === 'error' && <p role="alert" className="text-sm text-destructive">{state.message}</p>}
 ```
 
 Không còn `LookupState extends ActionState { data?: Discount }` — generic làm việc đó.
 
 ---
 
-## 5. Type-safe Component Props
+## 6. Type-safe Component Props
 
 ### Kế thừa props của element gốc
 
@@ -659,8 +562,10 @@ function Card({ className, size = "default", ...props }: React.ComponentProps<"d
 
 **`React.ComponentProps<"input">` vs `React.InputHTMLAttributes<HTMLInputElement>`:**
 
-`ComponentProps` **bao gồm `ref`** (từ React 19), `key`, và các prop React thêm vào.
-`InputHTMLAttributes` chỉ có attribute HTML. Dùng `ComponentProps` — nó là cái bạn muốn.
+`ComponentProps<"input">` gồm mọi attribute HTML **cộng `ref` và `key`**; `InputHTMLAttributes` chỉ có
+attribute HTML. Điều React 19 thay đổi là function component **nhận `ref` như prop thường**, nên
+`{...props}` ở trên chuyển luôn `ref` xuống `<input>` — không cần `forwardRef`. Muốn chủ động loại `ref`
+khỏi API của component, dùng `React.ComponentPropsWithoutRef<"input">`.
 
 ### Kế thừa từ component khác
 
@@ -680,8 +585,8 @@ function SelectTrigger({ className, size = "default", children, ...props }: Sele
 // button.tsx
 const buttonVariants = cva("...", {
   variants: {
-    variant: { default: "...", outline: "...", secondary: "...", destructive: "...", ghost: "...", link: "..." },
-    size: { default: "...", xs: "...", sm: "...", lg: "...", icon: "...", "icon-xs": "...", "icon-sm": "...", "icon-lg": "..." },
+    variant: { default: "...", outline: "...", destructive: "...", /* ... */ },
+    size: { default: "...", sm: "...", lg: "...", icon: "...", /* ... */ },
   },
   defaultVariants: { variant: "default", size: "default" },
 })
@@ -692,14 +597,29 @@ function Button({ className, variant = "default", size = "default", ...props }:
 
 `VariantProps<typeof buttonVariants>` **tự suy ra**:
 
+`{ variant?: "default" | "outline" | "destructive" | ... | null; size?: ... }`. Thêm một variant vào `cva` config → kiểu tự cập nhật. **Một nguồn sự thật cho cả CSS và type.**
+
+### Event handler và hook — để TS suy ra, chỉ khai báo khi tách hàm
+
 ```tsx
-{
-  variant?: "default" | "outline" | "secondary" | "destructive" | "ghost" | "link" | null
-  size?: "default" | "xs" | "sm" | "lg" | "icon" | "icon-xs" | "icon-sm" | "icon-lg" | null
-}
+// ✅ Inline: TS tự suy ra kiểu `e` từ prop onChange — không cần annotate
+<Input onChange={(e) => setQuery(e.target.value)} />
+
+// Tách hàm ra ngoài JSX thì phải khai báo — dùng kiểu sự kiện của React, không phải DOM
+const onQtyChange = (e: React.ChangeEvent<HTMLInputElement>) => setQty(Number(e.target.value))
+const onKey: React.KeyboardEventHandler<HTMLInputElement> = (e) => { if (e.key === 'Enter') submit() }
+
+// useState: chỉ cần generic khi giá trị khởi tạo không đủ nói hết kiểu
+const [replyOpen, setReplyOpen] = useState<string | null>(null)   // ✅ null → phải nói rõ union
+const [qty, setQty] = useState(1)                                 // ✅ number — suy ra được
+
+// useActionState: kiểu state suy ra từ action + initial state, không cần generic
+const [state, formAction, pending] = useActionState(placeOrderAction, initialActionState)
+//     ^ ActionState                ^ boolean
 ```
 
-Thêm một variant vào `cva` config → kiểu tự cập nhật. **Một nguồn sự thật cho cả CSS và type.**
+`children` thì dùng `React.ReactNode` (nhận cả string, `null`, mảng) — không dùng `React.ReactElement`
+(chỉ nhận một element JSX) và không cần `React.FC`.
 
 ### Generic Component
 
@@ -717,9 +637,7 @@ interface DataListProps<T> {
 }
 
 export function DataList<T>({ items, getKey, renderItem, empty, className }: DataListProps<T>) {
-  if (items.length === 0) {
-    return empty ?? <p className="text-sm text-muted-foreground">Không có dữ liệu.</p>
-  }
+  if (items.length === 0) return empty ?? <p>Không có dữ liệu.</p>
   return (
     <ul className={className}>
       {items.map((item) => (
@@ -732,13 +650,8 @@ export function DataList<T>({ items, getKey, renderItem, empty, className }: Dat
 
 ```tsx
 // TS infer T = Order, không cần khai báo
-<DataList
-  items={orders}
-  getKey={(o) => o._id}          // o có kiểu Order
-  renderItem={(o) => <OrderCard order={o} />}
-  empty={<p className="text-sm text-muted-foreground">Chưa có đơn hàng nào.</p>}
-  className="space-y-4"
-/>
+<DataList items={orders} getKey={(o) => o._id} renderItem={(o) => <OrderCard order={o} />} />
+//                              ^ o: Order
 ```
 
 **Kỹ thuật nâng cao: ràng buộc `getKey` bằng type để chỉ nhận field ID:**
@@ -764,7 +677,7 @@ interface DataListProps<T> {
 
 ---
 
-## 6. Validate ranh giới: Zod cho response API
+## 7. Validate ranh giới: Zod cho response API
 
 📄 `lib/api/http.ts` hiện `cast` response:
 
@@ -790,13 +703,7 @@ runtime, trong lúc render (nhớ file `16`).
 import type { ZodType } from 'zod'
 
 export interface FetchOptions<T = unknown> {
-  method?: string
-  body?: unknown
-  multipart?: FormData
-  auth?: boolean
-  tags?: string[]
-  cache?: RequestCache
-  signal?: AbortSignal
+  // ...method, body, auth, tags, cache... giữ nguyên
   /** Nếu truyền, response được validate — kiểu trả về suy ra từ schema. */
   schema?: ZodType<T>
 }
@@ -824,44 +731,18 @@ export async function apiFetch<T>(path: string, opts: FetchOptions<T> = {}): Pro
 // lib/validations/order.ts
 import { z } from 'zod'
 
-const decimalSchema = z.union([
-  z.number(),
-  z.string(),
-  z.object({ $numberDecimal: z.string() }),
-])
-
-const orderProductSchema = z.object({
-  productId: z.string(),
-  price: decimalSchema,
-  quantity: z.number(),
-  name: z.string(),
-  thumb: z.string(),
-})
+const decimalSchema = z.union([z.number(), z.string(), z.object({ $numberDecimal: z.string() })])
 
 export const orderSchema = z.object({
   _id: z.string(),
-  order_checkout: z.object({
-    totalPrice: z.number(),
-    totalDiscount: z.number(),
-    feeShip: z.number(),
-    totalCheckout: z.number(),
-  }),
-  order_shipping: z.object({
-    street: z.string().optional(),
-    city: z.string().optional(),
-    state: z.string().optional(),
-    country: z.string().optional(),
-  }).optional(),
-  order_payment: z.object({ method: z.string().optional() }).optional(),
+  order_checkout: z.object({ totalPrice: z.number(), feeShip: z.number(), totalCheckout: z.number() /* ... */ }),
   order_products: z.array(z.object({
     shopId: z.string(),
-    item_products: z.array(orderProductSchema),
-    price_raw: z.number(),
-    price_apply_discount: z.number(),
+    item_products: z.array(z.object({ productId: z.string(), price: decimalSchema, quantity: z.number() /* ... */ })),
   })),
-  order_status: z.enum(ORDER_STATUSES),
-  order_tracking_number: z.string().optional(),
+  order_status: z.enum(ORDER_STATUSES),     // Zod 4: z.enum nhận thẳng readonly tuple
   createdAt: z.string().optional(),
+  // ...
 })
 
 /** Type được DERIVE từ schema — một nguồn sự thật. */
@@ -876,11 +757,10 @@ const order = await apiFetch(`/order/${orderId}`, { auth: true, schema: orderSch
 
 **Ba lợi ích:**
 
-1. **`types/order.ts` không còn cần viết tay** — `z.infer` sinh ra nó. Không thể lệch giữa schema và type.
-2. **Lỗi ở đúng chỗ.** Backend đổi field → lỗi ở `apiFetch` với message rõ ràng và log field nào sai,
-   thay vì `TypeError: Cannot read properties of undefined` sâu trong `OrderCard`.
-3. **`order_products` được đảm bảo là array** → `.flatMap()` an toàn, không cần `?? []` (nhớ file `16`
-   về defensive vs fail-fast — giờ bạn được **cả hai**: fail-fast ở ranh giới, an toàn ở trong).
+1. **`types/order.ts` không cần viết tay** — `z.infer` sinh ra, không thể lệch schema/type.
+2. **Lỗi ở đúng chỗ** — backend đổi field → lỗi ở `apiFetch` kèm log field sai, thay vì `TypeError` sâu
+   trong `OrderCard`.
+3. **Fail-fast ở ranh giới, an toàn ở trong** (file `16`) — `order_products` chắc chắn là array.
 
 ⚖️ **Trade-off:**
 
@@ -889,43 +769,27 @@ const order = await apiFetch(`/order/${orderId}`, { auth: true, schema: orderSch
 | Type là bảo đảm runtime, không phải lời hứa | Phải viết schema cho mỗi response type (~30 dòng/type) |
 | Lỗi ở ranh giới với message rõ | Chi phí parse mỗi response (nhỏ, nhưng có với array lớn) |
 | `z.infer` xoá việc viết type tay | Backend đổi field **optional** → parse fail dù có thể bỏ qua được |
-| Bug backend lộ ra ngay | Cần quyết định: strict (`z.object`) hay lỏng (`.passthrough()`) |
+| Bug backend lộ ra ngay | Cần chọn chế độ với field lạ (xem dưới) |
 
-**Chiến lược thực dụng:** dùng `schema` cho **các endpoint quan trọng nhất** (order, checkout, cart —
-nơi dữ liệu sai gây thiệt hại), bỏ qua cho các endpoint hiển thị đơn giản. Đây là lý do `schema` là
-**optional** trong thiết kế trên.
+**Chiến lược thực dụng:** dùng `schema` cho **các endpoint quan trọng nhất** (order, checkout, cart),
+bỏ qua cho endpoint hiển thị đơn giản — vì vậy `schema` là **optional**.
 
-Và dùng `.passthrough()` nếu backend hay thêm field mới:
+Field lạ từ backend (repo dùng **Zod 4**):
 
 ```tsx
-export const orderSchema = z.object({ /* ... */ }).passthrough()
-// Field lạ được giữ lại thay vì bị strip → thêm field ở backend không phá frontend
+z.object({ /* ... */ })        // mặc định: field lạ bị STRIP (bỏ đi), không lỗi
+z.strictObject({ /* ... */ })  // field lạ → lỗi parse
+z.looseObject({ /* ... */ })   // field lạ được giữ lại (thay cho .passthrough() đã deprecated ở Zod 4)
 ```
 
 ---
 
-## 7. Vài kỹ thuật type hữu ích khác
+## 8. Vài kỹ thuật type hữu ích khác
 
 ### `satisfies` — kiểm tra mà không widen
 
-```tsx
-// ❌ Annotation làm MẤT literal type
-const NAV: Record<string, { href: string; label: string }> = {
-  dashboard: { href: '/seller', label: 'Dashboard' },
-}
-NAV.typo    // ✅ compile — Record<string, ...> nhận key nào cũng được
-
-// ✅ satisfies: kiểm tra shape, GIỮ literal type
-const NAV = {
-  dashboard: { href: '/seller', label: 'Dashboard' },
-  products: { href: '/seller/products', label: 'Products' },
-} satisfies Record<string, { href: string; label: string }>
-
-NAV.typo         // ❌ lỗi compile
-type NavKey = keyof typeof NAV    // "dashboard" | "products"
-```
-
-📄 Áp dụng vào `components/seller/nav-items.ts`:
+📄 `components/seller/nav-items.ts` hiện dùng annotation `export const NAV_ITEMS: SellerNavItem[] = [...]`
+→ `href` bị widen thành `string`. Dùng `satisfies` để vừa kiểm tra shape vừa giữ literal:
 
 ```tsx
 export const NAV_ITEMS = [
@@ -940,30 +804,19 @@ export type SellerHref = (typeof NAV_ITEMS)[number]['href']
 // "/seller" | "/seller/products" | "/seller/discounts" | "/seller/account"
 ```
 
-Bản gốc dùng `: SellerNavItem[]` (annotation) nên `href` bị widen thành `string`, và bạn mất khả năng
-derive `SellerHref`.
+Nếu bật `typedRoutes`, khai báo `href: Route` trong `SellerNavItem` còn chặt hơn — href sai route là lỗi compile.
 
 ### Type Predicate — repo đã dùng
 
-📄 Trong đề xuất ở file `11`:
-
 ```tsx
+// Đề xuất ở file 11
 const files = formData.getAll('images').filter((f): f is File => f instanceof File && f.size > 0)
 //                                                 ^^^^^^^^^ type predicate
 // files có kiểu File[], không phải (File | string)[]
 ```
 
-Không có `f is File`, `filter` trả `FormDataEntryValue[]` và bạn phải cast để dùng `f.type`.
-
-📄 Và trong FSM ở file `18`:
-
-```tsx
-export function isAddressComplete(a: Address): a is CompleteAddress {
-  return Boolean(a.street.trim() && a.city.trim() && a.state.trim() && a.country.trim())
-}
-```
-
-Type predicate + branded type = **"đã validate" trở thành một tính chất của kiểu**.
+Không có `f is File`, `filter` trả `FormDataEntryValue[]` và bạn phải cast. Tương tự
+`isAddressComplete(a): a is CompleteAddress` ở file `18`. Type predicate + branded type = **"đã validate" trở thành một tính chất của kiểu**.
 
 ### Template Literal Types cho cache tag
 
@@ -971,51 +824,43 @@ Nhớ file `10`: tag như `product:${id}`. Type hoá chúng để không typo:
 
 ```tsx
 // lib/cache/tags.ts
-export type CacheTag =
-  | 'products'
-  | 'orders'
-  | 'cart'
-  | `product:${string}`
-  | `order:${string}`
-  | `comments:${string}`
+export type CacheTag = 'products' | 'orders' | `product:${string}` | `order:${string}` | `comments:${string}`
 
 export const tags = {
   products: () => 'products' as const,
   product: (id: ProductId) => `product:${id}` as const,
-  orders: () => 'orders' as const,
-  order: (id: OrderId) => `order:${id}` as const,
   comments: (productId: ProductId) => `comments:${productId}` as const,
+  // ...
 } satisfies Record<string, (...args: never[]) => CacheTag>
 ```
 
 ```tsx
 // Dùng — không thể typo, và ID được type-check
-await apiFetch(`/product/${productId}`, {
-  cache: 'force-cache',
-  tags: [tags.products(), tags.product(productId)],
-})
+await apiFetch(`/product/${productId}`, { cache: 'force-cache', tags: [tags.products(), tags.product(productId)] })
 
-// Trong action
-revalidateTag(tags.product(productId))
-revalidateTag(tags.products())
+// Trong Server Action — Next 16: revalidateTag BẮT BUỘC đối số thứ 2 (bản 1 đối số đã deprecated)
+revalidateTag(tags.products(), 'max')     // stale-while-revalidate
+updateTag(tags.product(productId))        // chỉ trong Server Action: hết hạn ngay, read-your-writes
 ```
 
 So với `revalidateTag('prodcut:' + id)` — typo im lặng làm cache không bao giờ được invalidate.
 **Đây là loại bug tệ nhất: không có lỗi, chỉ có dữ liệu cũ.**
 
-### `Awaited` cho async params
+### Share type giữa `page.tsx` và `generateMetadata`
+
+Đừng tự derive bằng `Awaited<Parameters<...>>` — dùng chung helper `PageProps` (mục 2):
 
 ```tsx
-// Thay vì viết lại type của params
-type OrderPageParams = Awaited<Parameters<typeof OrderDetailPage>[0]['params']>
-// { id: string }
+export async function generateMetadata(props: PageProps<'/products/[id]'>): Promise<Metadata> {
+  const { id } = await props.params
+  // ...
+}
+export default async function ProductPage(props: PageProps<'/products/[id]'>) { /* ... */ }
 ```
-
-Hữu ích khi bạn muốn share type giữa `page.tsx` và `generateMetadata`.
 
 ---
 
-## 8. When NOT to over-type
+## 9. When NOT to over-type
 
 Type system có thể trở thành gánh nặng. Ba dấu hiệu bạn đã đi quá xa:
 
@@ -1050,46 +895,19 @@ Nếu type chặt hơn (`{ $numberDecimal: string }`), mọi chỗ dùng phải 
 
 ---
 
-## 9. Trade-offs
-
-| Kỹ thuật | Lợi ích | Cái giá |
-| --- | --- | --- |
-| **Branded types** | Cả class bug ID thành lỗi compile; validate bắt buộc | `.safeParse()` ở mọi điểm vào; khái niệm mới cho team |
-| **`as const` + `[number]`** | Một nguồn sự thật cho value + type | Không có (nên dùng mặc định) |
-| **Discriminated union** | Trạng thái sai không biểu diễn được | Verbose hơn; cần hiểu narrowing |
-| **`assertNever`** | Mở rộng union → lỗi compile ở mọi chỗ thiếu | Thêm một dòng mỗi switch |
-| **Zod validate response** | Type thành bảo đảm runtime; lỗi ở ranh giới | ~30 dòng schema/type; chi phí parse |
-| **Generic component** | Tái dùng type-safe | Signature phức tạp hơn; TS error khó đọc |
-| **`satisfies`** | Kiểm tra shape + giữ literal | Cần TS 4.9+ |
-| **Template literal types** | Tag/route không typo được | Chỉ hữu ích khi có nhiều literal |
-
----
-
 ## 10. Best Practices
 
-1. **Derive type từ value bằng `as const` + `[number]`.** Đừng viết union literal tay khi bạn cũng cần
-   array runtime.
-
-2. **`Record<Union, T>` để bắt buộc đủ mọi case.** `PAYMENT_LABELS: Record<PaymentMethod, string>` —
-   thêm method mới mà quên nhãn = lỗi compile.
-
-3. **`assertNever` ở nhánh default của mọi switch trên union.** Đây là cách rẻ nhất để type system
-   bảo vệ bạn khi mở rộng.
-
-4. **Branded types khi có ≥3 loại ID và chúng đi cạnh nhau.** `DeleteButton({ commentId, productId })`
-   là dấu hiệu rõ ràng.
-
-5. **Type predicate để "đã validate" trở thành tính chất của kiểu**, không phải một boolean rời rạc.
-
-6. **`ComponentProps<"input">`, không `InputHTMLAttributes`.** Nó bao gồm `ref`.
-
-7. **`satisfies` thay vì annotation** khi bạn muốn giữ literal type.
-
-8. **Validate response bằng Zod ở các endpoint quan trọng**, và `z.infer` thay vì viết interface tay.
-
-9. **Type lỏng ở ranh giới + hàm chuẩn hoá có test.** `Decimal` + `toPriceString` là mẫu đúng.
-
-10. **Đừng over-type.** Nếu type khó đọc hơn code, hoặc bạn phải `as any` để dùng nó — hãy đơn giản hoá.
+1. **React 19:** `React.JSX.Element` (không phải `JSX.Element`), `useRef(null)` luôn có đối số, `ref` là
+   prop thường — bỏ `forwardRef`.
+2. **Next 16:** dùng `PageProps<'/route'>` / `LayoutProps` / `RouteContext` thay vì tự viết type `params`;
+   bật `typedRoutes`; CI chạy `next typegen && tsc --noEmit`.
+3. **Derive type từ value** bằng `as const` + `[number]`; **`Record<Union, T>`** để bắt buộc đủ mọi case.
+4. **`assertNever`** ở nhánh default của mọi switch trên union.
+5. **Branded types** khi có ≥3 loại ID đi cạnh nhau (`DeleteButton({ commentId, productId })`).
+6. **Type predicate / branded type** để "đã validate" thành tính chất của kiểu.
+7. **`ComponentProps<"input">`** cho wrapper; **`satisfies`** khi cần giữ literal type.
+8. **Zod ở các endpoint quan trọng**, `z.infer` thay vì interface tay.
+9. **Type lỏng ở ranh giới + hàm chuẩn hoá có test** (`Decimal` + `toPriceString`); đừng over-type.
 
 ---
 
@@ -1105,5 +923,6 @@ Nếu type chặt hơn (`{ $numberDecimal: string }`), mọi chỗ dùng phải 
 8. `StringKeys<T>` hoạt động thế nào? `never` biến đi đâu?
 9. `apiFetch<Order>()` hiện tại là "lời hứa" hay "bảo đảm"? Zod thay đổi điều đó ra sao?
 10. Vì sao `Decimal = number | string | {...}` là type lỏng **đúng đắn**, không phải sự lười?
+11. `useRef<HTMLInputElement>()` lỗi gì ở React 19? `PageProps<'/orders/[id]'>` lấy từ đâu và vì sao CI cần `next typegen`?
 
 ➡️ Tiếp theo: `22-bundle-va-performance-engineering.md`
